@@ -160,6 +160,10 @@ class App:
         self.qm.set_update_callback(lambda task: self._events.put(("task", task)))
         self.row_by_task = {}
         self._completed_handled = set()
+        # Tasks the user removed. Removing one cancels it, and that status
+        # change queues an update event -- without this, draining that event
+        # would re-add the row that was just deleted (see remove_selected).
+        self._removed_tasks = set()
         self._dark_mode = None
 
         root.title("VDR — Download Manager")
@@ -439,6 +443,8 @@ class App:
             while True:
                 kind, payload = self._events.get_nowait()
                 if kind == "task":
+                    if payload in self._removed_tasks:
+                        continue  # deliberately gone; don't resurrect it
                     if payload not in self.row_by_task:
                         self._add_row(payload)
                 elif kind == "info":
@@ -541,8 +547,13 @@ class App:
     def remove_selected(self):
         t = self._selected_task()
         if t:
+            # Mark it removed *before* qm.remove(), which cancels the task and
+            # so fires a status update. That update is queued, not immediate,
+            # so it would otherwise arrive after the row is gone and re-add it.
+            self._removed_tasks.add(t)
             iid = self.row_by_task.pop(t)
             self.tree.delete(iid)
+            self._completed_handled.discard(t)
             self.qm.remove(t)
 
     def open_folder_selected(self):
