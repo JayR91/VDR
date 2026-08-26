@@ -19,6 +19,7 @@ permissions:
 jobs:
   build-macos:
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +43,9 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    # A build that hangs rather than fails would otherwise sit on the runner
+    # until GitHub's 6-hour default kills it.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -55,6 +59,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Verify platform dispatch
+        timeout-minutes: 5
         # Cheap guard against the port regressing: this is the suite that
         # pins gui.py's integration surface and the Win32 power/idle probes,
         # and here it runs on an actual Windows host.

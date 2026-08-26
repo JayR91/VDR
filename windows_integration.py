@@ -33,6 +33,7 @@ class WindowsIntegration:
         self._quit = quit_callback
         self._progress_text = ""
         self._icon = None
+        self._thread = None
         if platform.system() != "Windows":
             return
         try:
@@ -77,23 +78,40 @@ class WindowsIntegration:
         )
         self._icon = pystray.Icon("VDR", self._make_image(), "VDR", menu)
         self.status_item = self._icon
-        # run_detached() keeps the tray pump on its own thread; calling run()
-        # here would block Tk's mainloop and freeze the whole UI.
-        try:
-            self._icon.run_detached()
-        except Exception:
-            # Some environments (headless CI, no Explorer shell) have no
-            # notification area at all. Losing the tray icon must not take
-            # the app down with it.
-            self._icon = None
-            self.status_item = None
-            self.available = False
+
+        # The tray pump gets a thread of its own that we start and own.
+        #
+        # pystray's own run_detached() is the obvious call here and it is the
+        # wrong one: it does setup work on the calling thread before handing
+        # off, and where there is no interactive desktop to attach a window to
+        # -- a headless CI runner, a session-0 service, a locked-down kiosk --
+        # that setup does not fail, it blocks. install_menu_bar() is invoked
+        # from root.after(), i.e. on Tk's main thread, so blocking there
+        # freezes the entire UI before the window has finished coming up. A
+        # tray icon is a convenience; it must never be able to take the app
+        # hostage.
+        #
+        # daemon=True matters just as much: a non-daemon tray thread would
+        # keep the process alive after the window closes, leaving an
+        # invisible VDR that only Task Manager can end.
+        def pump():
+            try:
+                self._icon.run()
+            except Exception:
+                # No notification area (no Explorer shell, headless session).
+                # Losing the tray icon must not take the app down with it.
+                self.available = False
+
+        self._thread = threading.Thread(target=pump, name="vdr-tray", daemon=True)
+        self._thread.start()
 
     def _on_show(self, icon=None, item=None):
         if self._show:
             self._show()
 
     def _on_quit(self, icon=None, item=None):
+        # stop() ends the pump thread's message loop; the thread is a daemon
+        # either way, so a failure here still cannot wedge the shutdown.
         if self._icon:
             try:
                 self._icon.stop()

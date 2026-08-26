@@ -13,6 +13,7 @@ two things that actually broke when the app was macOS-only:
 import os
 import sys
 import platform
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -81,6 +82,24 @@ if "WindowsIntegration" in backends:
         check("WindowsIntegration safe when unavailable", True)
     except Exception as e:
         check(f"WindowsIntegration safe when unavailable ({e})", False)
+
+# --- 2b. installing the tray icon must never block the caller ---------------
+# gui.py calls install_menu_bar() from root.after(), i.e. on Tk's main thread.
+# pystray's run_detached() does setup on the calling thread, and where there is
+# no interactive desktop (headless CI, session-0 service) that setup blocks
+# rather than failing -- which froze the whole UI before the window finished
+# appearing. The pump now runs on a daemon thread we own, so this returns
+# immediately everywhere. Timing it turns a regression into a fast failure
+# instead of a hung job.
+for name, cls in backends.items():
+    inst = cls(lambda u: None, lambda: None, lambda: None)
+    start = time.monotonic()
+    try:
+        inst.install_menu_bar()
+        elapsed = time.monotonic() - start
+        check(f"{name}.install_menu_bar returns promptly ({elapsed:.2f}s)", elapsed < 5.0)
+    except Exception as e:
+        check(f"{name}.install_menu_bar returns promptly ({e})", False)
 
 # --- 3. factory picks the backend matching the host -------------------------
 expected = {"Darwin": "MacIntegration", "Windows": "WindowsIntegration"}.get(
