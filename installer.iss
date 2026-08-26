@@ -38,7 +38,9 @@ DefaultGroupName={#VDRName}
 DisableProgramGroupPage=yes
 LicenseFile=LICENSE
 OutputDir=dist_installer
-OutputBaseFilename=VDR-{#VDRVersion}-Setup
+; Matches the macOS artifact's shape (see scripts/build_dmg.sh) so the two
+; sit together on a release page and each names its own platform.
+OutputBaseFilename=VDR-{#VDRVersion}-Windows-Setup
 SetupIconFile=AppIcon.ico
 UninstallDisplayIcon={app}\{#VDRExe}
 Compression=lzma2/max

@@ -61,9 +61,13 @@ handling, and bandwidth throttling (see "What's been tested" below).
 Prebuilt installers for both platforms are attached to every
 [release](https://github.com/JayR91/VDR/releases):
 
-- **macOS** — `VDR Installer.dmg`. Open it and drag VDR to Applications.
-- **Windows** — `VDR-<version>-Setup.exe`. It installs per-user, so it needs no
-  administrator rights and raises no UAC prompt.
+- **macOS** — `VDR-<version>-macOS-Installer.dmg`. Open it and drag VDR to
+  Applications.
+- **Windows** — `VDR-<version>-Windows-Setup.exe`. It installs per-user, so it
+  needs no administrator rights and raises no UAC prompt.
+
+Each filename names its own platform, so there is nothing to work out from the
+extension.
 
 Neither build is code-signed, so both operating systems will warn on first launch.
 On macOS use right-click → Open. On Windows, SmartScreen shows "Windows protected your
@@ -123,7 +127,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -Version v2.2
 ```
 
 That downloads ffmpeg, freezes `VDR-windows.spec` into `dist\VDR\`, and compiles
-`installer.iss` into `dist_installer\VDR-<version>-Setup.exe`. Pass `-SkipFfmpeg` to
+`installer.iss` into `dist_installer\VDR-<version>-Windows-Setup.exe`. Pass `-SkipFfmpeg` to
 build without bundling it (the app then falls back to whatever is on PATH).
 
 Both platforms are built and published automatically by

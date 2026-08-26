@@ -6,8 +6,20 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Version is passed by .github/workflows/release.yml (the tag name); local
+# builds get a placeholder, mirroring scripts/build_windows.ps1's -Version.
+VERSION="${1:-0.0.0}"
+VERSION="${VERSION#v}"
+
 APP_NAME="VDR"
-DMG_NAME="VDR Installer.dmg"
+# The filename says which OS it is for, rather than leaving that to the
+# extension. Someone scanning a release page should not have to know that
+# .dmg means macOS and .exe means Windows, and the two names sitting next to
+# each other should be obviously a pair.
+#
+# No spaces: GitHub rewrites them to dots on upload, so "VDR Installer.dmg"
+# arrived as "VDR.Installer.dmg" -- a name nothing in the repo actually used.
+DMG_NAME="VDR-${VERSION}-macOS-Installer.dmg"
 
 echo "==> Building '$APP_NAME.app' with PyInstaller"
 rm -rf build dist
@@ -50,7 +62,7 @@ echo "==> Creating $DMG_NAME"
 # draggable even though it technically is. dmgbuild constructs a proper
 # .DS_Store with both icons laid out side by side (see dmg_settings.py),
 # without needing Finder automation permissions to build it.
-rm -f "$DMG_NAME"
+rm -f "$DMG_NAME" VDR-*-macOS-Installer.dmg "VDR Installer.dmg"
 DMG_APP_NAME="$APP_NAME" DMG_APP_PATH="dist/$APP_NAME.app" \
   dmgbuild -s scripts/dmg_settings.py "$APP_NAME" "$DMG_NAME"
 
