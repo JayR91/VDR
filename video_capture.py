@@ -16,12 +16,23 @@ import yt_dlp.extractor as _ie_mod
 
 
 def _bundled_ffmpeg_dir():
-    """When frozen by PyInstaller (see scripts/build_dmg.sh, which copies
-    the build machine's own ffmpeg next to the executable), ffmpeg ships
-    inside the app bundle so end users don't need Homebrew installed at
-    all. Returns None when running from source, falling back to PATH."""
-    if getattr(sys, "frozen", False) and os.path.exists(os.path.join(os.path.dirname(sys.executable), "ffmpeg")):
-        return os.path.dirname(sys.executable)
+    """When frozen by PyInstaller, ffmpeg ships next to the executable so end
+    users need nothing preinstalled -- Homebrew on macOS (see
+    scripts/build_dmg.sh), a PATH entry on Windows (see
+    scripts/build_windows.ps1). Returns None when running from source,
+    falling back to PATH.
+
+    The binary is `ffmpeg` on macOS/Linux and `ffmpeg.exe` on Windows; probing
+    for the bare name on Windows silently found nothing and left yt-dlp with
+    no muxer, so merged video+audio downloads failed on exactly the machines
+    least likely to have ffmpeg installed already.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    exe_dir = os.path.dirname(sys.executable)
+    for name in ("ffmpeg.exe", "ffmpeg"):
+        if os.path.exists(os.path.join(exe_dir, name)):
+            return exe_dir
     return None
 
 _extractor_classes = None

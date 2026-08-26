@@ -1,19 +1,23 @@
-name: Build and release DMG
+name: Build and release
 
 # Triggers on any version tag push (e.g. `git tag v1.0.1 && git push origin v1.0.1`).
-# Builds the standalone .app with PyInstaller, packages it into a .dmg, and
-# attaches it to a GitHub Release for that tag -- the same steps documented
-# in scripts/build_dmg.sh, just run automatically instead of by hand.
+#
+# Each platform is frozen on its own runner -- PyInstaller cannot cross-compile,
+# so a Windows .exe genuinely requires a Windows machine. Both jobs upload their
+# installer as an artifact and a third job attaches them to a single release,
+# rather than each job racing to call `gh release create` for the same tag.
 on:
   push:
     tags:
       - "v*"
+  # Lets the whole pipeline be exercised without cutting a release.
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,10 +34,61 @@ jobs:
       - name: Build DMG
         run: ./scripts/build_dmg.sh
 
-      - name: Create release and upload DMG
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: "VDR Installer.dmg"
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify platform dispatch
+        # Cheap guard against the port regressing: this is the suite that
+        # pins gui.py's integration surface and the Win32 power/idle probes,
+        # and here it runs on an actual Windows host.
+        run: python tests/test_cross_platform.py
+
+      - name: Build EXE and installer
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_NAME -match '^v') { $env:GITHUB_REF_NAME } else { "0.0.0" }
+          ./scripts/build_windows.ps1 -Version $version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist_installer/*.exe
+          if-no-files-found: error
+
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    # workflow_dispatch runs exist to prove the build; only a tag publishes.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" "VDR Installer.dmg" \
+          gh release create "${{ github.ref_name }}" \
+            artifacts/macos-dmg/*.dmg \
+            artifacts/windows-installer/*.exe \
+            --repo "${{ github.repository }}" \
             --title "VDR ${{ github.ref_name }}" \
             --generate-notes

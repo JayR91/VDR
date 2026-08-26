@@ -6,5 +6,12 @@ dist/
 .DS_Store
 *.dmg
 
+# Windows build outputs (see scripts/build_windows.ps1).
+dist_installer/
+version_info.txt
+ffmpeg.exe
+ffprobe.exe
+*.exe
+
 # Separate, unrelated project living in this same directory -- see CLAUDE.md.
 laser_wars/

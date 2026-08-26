@@ -1,4 +1,5 @@
 import os
+import platform
 import queue
 import subprocess
 import threading
@@ -11,7 +12,7 @@ from queue_manager import QueueManager
 from engine import Status
 import video_capture
 from organizer import categorized_destination, organize_completed_file
-from macos_integration import MacIntegration
+from desktop_integration import create_integration
 from focus_guard import FocusGuard, POLICY_HOLD
 
 DEFAULT_DIR = os.path.expanduser("~/Downloads/VDR")
@@ -258,7 +259,7 @@ class App:
         )
         self._activity_clear_job = None
 
-        self.mac = MacIntegration(self.add_url_from_drop, self.show_window, self.quit_app)
+        self.mac = create_integration(self.add_url_from_drop, self.show_window, self.quit_app)
         self.root.after(700, self.mac.install_menu_bar)
         # Make sure the window is actually up front when the app is opened,
         # rather than buried behind whatever the user was already looking at.
@@ -273,21 +274,43 @@ class App:
         # background, exactly like closing Slack/Mail's window doesn't quit
         # them. Click the Dock icon to bring it back; Cmd+Q, the app menu, or
         # "Quit VDR" in the menu-bar icon are the real exits.
-        self.root.protocol("WM_DELETE_WINDOW", self.root.withdraw)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close_window)
 
         self.root.after(200, self._drain_events)
         self.root.after(500, self._refresh)
         self.root.after(1500, self._sync_system_theme)
 
     def _system_is_dark(self):
-        if os.uname().sysname != "Darwin":
-            return False
-        try:
-            result = subprocess.run(["defaults", "read", "-g", "AppleInterfaceStyle"],
-                                    capture_output=True, text=True, timeout=2)
-            return result.returncode == 0 and "Dark" in result.stdout
-        except Exception:
-            return False
+        # os.uname() is Unix-only -- calling it on Windows raises
+        # AttributeError rather than returning something falsy, so the check
+        # has to go through platform.system().
+        system = platform.system()
+        if system == "Darwin":
+            try:
+                result = subprocess.run(["defaults", "read", "-g", "AppleInterfaceStyle"],
+                                        capture_output=True, text=True, timeout=2)
+                return result.returncode == 0 and "Dark" in result.stdout
+            except Exception:
+                return False
+        if system == "Windows":
+            # Windows has no CLI equivalent of `defaults read`; the theme
+            # lives in the per-user registry. AppsUseLightTheme is 0 in dark
+            # mode (there is no "AppsUseDarkTheme" key).
+            try:
+                import winreg
+
+                key = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                )
+                try:
+                    value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                    return value == 0
+                finally:
+                    key.Close()
+            except Exception:
+                return False
+        return False
 
     def _apply_system_theme(self):
         dark = self._system_is_dark()
@@ -503,6 +526,20 @@ class App:
         name = os.path.basename(task.dest_path)
         self.mac.play_completion_sound()
         self.mac.notify_completion("Download complete", name)
+
+    def _on_close_window(self):
+        """Hide rather than quit -- but only while something can bring it back.
+
+        On macOS the Dock icon always can. On Windows that job belongs to the
+        tray icon, and the tray is optional (pystray missing, or no Explorer
+        shell). Hiding with no tray icon would leave VDR running with no way
+        to reach it and no way to quit it short of Task Manager, so in that
+        case closing the window means what it appears to mean.
+        """
+        if getattr(self.mac, "available", False):
+            self.root.withdraw()
+        else:
+            self.quit_app()
 
     def show_window(self):
         self.root.after(0, lambda: (self.root.deiconify(), self.root.lift(), self.root.focus_force()))

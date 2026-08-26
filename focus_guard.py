@@ -1,17 +1,21 @@
 """Focus Guard — power- and attention-aware downloading.
 
 A download manager that only knows about clock time and speed caps has no
-idea whether the Mac is on battery, in Low Power Mode, or whether you are
-actively using the keyboard and mouse.
+idea whether the machine is on battery, in Low Power Mode / Battery Saver, or
+whether you are actively using the keyboard and mouse.
 
 Focus Guard watches those signals and:
   - pauses transfers on battery / Low Power Mode
-  - crawls (slow cap) while you are using the Mac, so browsing stays snappy
-  - runs at full (or your own) speed once the Mac has been idle
+  - crawls (slow cap) while you are using the machine, so browsing stays snappy
+  - runs at full (or your own) speed once the machine has been idle
+
+The signals are read natively per platform (macOS: ioreg/pmset; Windows:
+GetLastInputInfo/GetSystemPowerStatus) behind one pair of functions.
 """
 
 from __future__ import annotations
 
+import platform
 import re
 import subprocess
 import threading
@@ -37,7 +41,7 @@ def decide_policy(enabled: bool, on_battery: bool, low_power: bool, idle_seconds
     return POLICY_FULL
 
 
-def read_idle_seconds() -> float:
+def _read_idle_seconds_darwin() -> float:
     try:
         out = subprocess.check_output(
             ["ioreg", "-c", "IOHIDSystem", "-d", "4"],
@@ -51,8 +55,48 @@ def read_idle_seconds() -> float:
     return 9999.0
 
 
-def read_power() -> tuple[bool, bool]:
-    """Return (on_battery, low_power_mode)."""
+def _read_idle_seconds_windows() -> float:
+    """Seconds since the last keyboard/mouse input, via GetLastInputInfo.
+
+    There is no `ioreg` to shell out to on Windows, and no CLI that reports
+    this at all -- it is a Win32 call or nothing. GetLastInputInfo returns the
+    tick count of the last input event, which we subtract from the current
+    tick count.
+
+    Both values come back as 32-bit unsigned milliseconds and wrap roughly
+    every 49.7 days. Masking the difference back into 32 bits makes the wrap
+    harmless instead of producing a huge negative idle time (which would read
+    as "idle forever" and let downloads run at full speed while the user is
+    typing).
+    """
+    try:
+        import ctypes
+
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        info = LASTINPUTINFO()
+        info.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return 9999.0
+        now = ctypes.windll.kernel32.GetTickCount()
+        return ((now - info.dwTime) & 0xFFFFFFFF) / 1000.0
+    except Exception:
+        return 9999.0
+
+
+def read_idle_seconds() -> float:
+    system = platform.system()
+    if system == "Darwin":
+        return _read_idle_seconds_darwin()
+    if system == "Windows":
+        return _read_idle_seconds_windows()
+    # Unknown platform: report "idle" so Focus Guard never throttles a
+    # machine it cannot actually measure.
+    return 9999.0
+
+
+def _read_power_darwin() -> tuple[bool, bool]:
     on_battery = False
     low_power = False
     try:
@@ -68,6 +112,50 @@ def read_power() -> tuple[bool, bool]:
     except Exception:
         pass
     return on_battery, low_power
+
+
+def _read_power_windows() -> tuple[bool, bool]:
+    """Return (on_battery, low_power_mode) from GetSystemPowerStatus.
+
+    ACLineStatus is 0 on battery, 1 on mains, 255 when the system cannot
+    tell -- desktops without a battery usually report 255, and treating that
+    as "on battery" would pause every download forever on a machine that is
+    permanently plugged in. Only an explicit 0 counts.
+
+    SystemStatusFlag is Windows' Battery Saver, the closest counterpart to
+    macOS Low Power Mode.
+    """
+    try:
+        import ctypes
+
+        class SYSTEM_POWER_STATUS(ctypes.Structure):
+            _fields_ = [
+                ("ACLineStatus", ctypes.c_byte),
+                ("BatteryFlag", ctypes.c_byte),
+                ("BatteryLifePercent", ctypes.c_byte),
+                ("SystemStatusFlag", ctypes.c_byte),
+                ("BatteryLifeTime", ctypes.c_ulong),
+                ("BatteryFullLifeTime", ctypes.c_ulong),
+            ]
+
+        status = SYSTEM_POWER_STATUS()
+        if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
+            return False, False
+        on_battery = status.ACLineStatus == 0
+        low_power = status.SystemStatusFlag == 1
+        return on_battery, low_power
+    except Exception:
+        return False, False
+
+
+def read_power() -> tuple[bool, bool]:
+    """Return (on_battery, low_power_mode)."""
+    system = platform.system()
+    if system == "Darwin":
+        return _read_power_darwin()
+    if system == "Windows":
+        return _read_power_windows()
+    return False, False
 
 
 class FocusGuard:

@@ -1,9 +1,9 @@
 # VDR — Video Downloader
 
-A fast, resumable desktop download manager for macOS, built in Python. VDR does real
-segmented HTTP downloading, captures video from hundreds of streaming sites, integrates
-with every major browser, and adapts its own behaviour to your Mac's battery and idle
-state.
+A fast, resumable desktop download manager for macOS and Windows, built in Python. VDR
+does real segmented HTTP downloading, captures video from hundreds of streaming sites,
+integrates with every major browser, and adapts its own behaviour to your machine's
+battery and idle state.
 
 Tested components: segmented downloads, pause/resume, resume-after-restart, retry/error
 handling, and bandwidth throttling (see "What's been tested" below).
@@ -19,12 +19,17 @@ handling, and bandwidth throttling (see "What's been tested" below).
   (default 5 retries) before the whole download is marked as failed.
 - **Bandwidth throttling** — a global speed cap (KB/s) shared fairly across all active
   downloads and segments, adjustable live with a numeric field or slider.
-- **Focus Guard** — VDR watches your Mac's power and idle state: it pauses downloads
-  on battery or Low Power Mode, crawls at 256 KB/s while you're actively using the
-  machine so browsing stays snappy, and returns to full speed once it's idle and
-  plugged in. Toggle it in the toolbar.
+- **Focus Guard** — VDR watches your machine's power and idle state: it pauses downloads
+  on battery or Low Power Mode / Battery Saver, crawls at 256 KB/s while you're actively
+  using the machine so browsing stays snappy, and returns to full speed once it's idle
+  and plugged in. Toggle it in the toolbar. Reads the native signals on each platform
+  (macOS `ioreg`/`pmset`, Windows `GetLastInputInfo`/`GetSystemPowerStatus`).
 - **macOS integration** — a live Dock badge, menu-bar drop target, automatic light/dark
   appearance, native completion notifications, and the Glass system chime.
+- **Windows integration** — a notification-area (tray) icon with Show/Quit and live
+  progress in its tooltip, automatic light/dark appearance read from the registry,
+  native toast notifications, and a completion chime. Closing the window keeps VDR
+  running in the tray so downloads and the extension bridge continue.
 - **Scheduling and organisation** — queue a URL for a future time (blank scheduling time
   means the next midnight); completed files are sorted into Videos, Documents, Zips,
   Audio, Images, or Other folders inside `~/Downloads/VDR`.
@@ -43,10 +48,26 @@ handling, and bandwidth throttling (see "What's been tested" below).
 ## Requirements
 
 - Python 3.9+
-- `pip install -r requirements.txt` (installs `requests`, `flask`, `yt-dlp`)
+- `pip install -r requirements.txt` (installs `requests`, `flask`, `yt-dlp`; the
+  platform-specific extras are marked so only the ones for your OS are pulled in)
 - On Linux, Tkinter needs the system package if it isn't already present:
   `sudo apt install python3-tk`
 - For video downloads that need merging (video+audio), `ffmpeg` should be on your PATH.
+  The packaged builds (DMG and Windows installer) bundle it, so installed copies need
+  nothing preinstalled.
+
+## Installing
+
+Prebuilt installers for both platforms are attached to every
+[release](https://github.com/JayR91/VDR/releases):
+
+- **macOS** — `VDR Installer.dmg`. Open it and drag VDR to Applications.
+- **Windows** — `VDR-<version>-Setup.exe`. It installs per-user, so it needs no
+  administrator rights and raises no UAC prompt.
+
+Neither build is code-signed, so both operating systems will warn on first launch.
+On macOS use right-click → Open. On Windows, SmartScreen shows "Windows protected your
+PC" — choose **More info → Run anyway**.
 
 ## Running the app
 
@@ -72,6 +93,9 @@ localhost — nothing external can reach it).
 - On macOS, drag an `http`/`https` link onto the `⇩` menu-bar icon to queue it without
   opening the window. The Dock badge shows a single download's percentage or the active
   download count; it clears on completion.
+- On Windows, VDR lives in the notification area while its window is closed; hover the
+  tray icon for progress, or use its Show/Quit menu. Windows has no drag-onto-icon
+  equivalent, so use the browser extension or **+ Add URL** to queue links.
 
 ### Building the macOS app
 
@@ -86,6 +110,24 @@ The resulting `dist/VDR.app` supports Dock URL delivery via macOS argv emulation
 links can be dropped onto its Dock icon after the bundle is launched. The menu-bar drop
 target works while running from source as well. `setup.py` remains available for py2app
 builds if you prefer that packaging flow.
+
+### Building the Windows app
+
+PyInstaller cannot cross-compile, so this has to run on Windows. From a checkout,
+with [Inno Setup](https://jrsoftware.org/isdl.php) installed
+(`winget install JRSoftware.InnoSetup`):
+
+```powershell
+pip install -r requirements.txt
+powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -Version v2.2.0
+```
+
+That downloads ffmpeg, freezes `VDR-windows.spec` into `dist\VDR\`, and compiles
+`installer.iss` into `dist_installer\VDR-<version>-Setup.exe`. Pass `-SkipFfmpeg` to
+build without bundling it (the app then falls back to whatever is on PATH).
+
+Both platforms are built and published automatically by
+`.github/workflows/release.yml` when a `v*` tag is pushed.
 
 ## Installing the browser extension
 
@@ -176,11 +218,22 @@ vdr/
   focus_guard.py        # battery / idle-aware Focus Guard
   video_capture.py      # yt-dlp wrapper for video/stream downloads
   organizer.py           # post-download category routing + filename sanitization
+  desktop_integration.py # picks the native integration for the running OS
   macos_integration.py   # optional Dock/menu-bar/notification integration (PyObjC)
+  windows_integration.py # optional tray-icon/toast integration (pystray)
   server.py             # local Flask server for the browser extension
   gui.py                # Tkinter desktop UI
   main.py               # entry point — wires everything together
   requirements.txt
+  VDR.spec               # PyInstaller spec, macOS (.app bundle)
+  VDR-windows.spec       # PyInstaller spec, Windows (.exe tree)
+  installer.iss          # Inno Setup script for the Windows installer
+  scripts/
+    build_dmg.sh         # macOS: freeze + package the DMG
+    build_windows.ps1    # Windows: fetch ffmpeg, freeze, compile installer
+  tests/
+    test_remove_row.py       # real Tk/App integration test for row removal
+    test_cross_platform.py   # platform dispatch + integration-surface parity
   browser_extension/
     manifest.json        # MV3; declares both Chromium's service_worker and
                           # Firefox's scripts background forms + gecko id
