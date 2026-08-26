@@ -8,8 +8,18 @@ cd "$(dirname "$0")/.."
 
 # Version is passed by .github/workflows/release.yml (the tag name); local
 # builds get a placeholder, mirroring scripts/build_windows.ps1's -Version.
+#
+# Anything that is not a dotted number is rejected rather than interpolated:
+# the workflow hands over github.ref_name, which is the branch name on a
+# manual run, and taking that at face value produced an artifact called
+# "VDR-main-macOS-Installer.dmg" while the same run's Windows build correctly
+# fell back to 0.0.0. Both platforms now agree on what an absent version is.
 VERSION="${1:-0.0.0}"
 VERSION="${VERSION#v}"
+if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+  echo "==> '$VERSION' is not a version number; using 0.0.0"
+  VERSION="0.0.0"
+fi
 
 APP_NAME="VDR"
 # The filename says which OS it is for, rather than leaving that to the
