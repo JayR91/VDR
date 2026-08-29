@@ -14,6 +14,8 @@ from typing import Callable, Optional
 import yt_dlp
 import yt_dlp.extractor as _ie_mod
 
+import page_media
+
 
 def _bundled_ffmpeg_dir():
     """When frozen by PyInstaller, ffmpeg ships next to the executable so end
@@ -46,6 +48,36 @@ def _get_extractor_classes():
     if _extractor_classes is None:
         _extractor_classes = [c for c in _ie_mod.gen_extractor_classes() if c.ie_key() != "Generic"]
     return _extractor_classes
+
+
+_UNSUPPORTED_MARKERS = (
+    "unsupported url",
+    "no video formats found",
+    "unable to extract",
+)
+
+
+def _looks_unsupported(err: Optional[Exception]) -> bool:
+    return any(m in str(err or "").lower() for m in _UNSUPPORTED_MARKERS)
+
+
+def resolve_page_media(url: str) -> Optional[str]:
+    """A media URL embedded in [url], when yt-dlp does not know the site.
+
+    yt-dlp recognises sites by name and, failing that, looks for a <video> tag
+    or a bare playlist link. Course platforms built on React/Next.js satisfy
+    neither: the player is handed its URL from inside a JSON blob, so yt-dlp
+    answers "Unsupported URL" for a page whose HLS ladder is sitting in plain
+    text in the markup. Reading it out and passing that along is enough --
+    yt-dlp handles the playlist itself perfectly well.
+
+    Returns None when the page has no media in it, which is also the honest
+    answer for a page that builds its URLs in JavaScript.
+    """
+    try:
+        return page_media.resolve(url)
+    except Exception:
+        return None
 
 
 def looks_like_video_url(url: str) -> bool:
@@ -98,6 +130,7 @@ def download_video(
     quality: str = "best",
     progress_hook: Optional[Callable] = None,
     audio_only: bool = False,
+    _resolved: bool = False,
 ):
     os.makedirs(dest_dir, exist_ok=True)
     ffmpeg_dir = _bundled_ffmpeg_dir()
@@ -208,6 +241,22 @@ def download_video(
             # something that has nothing to do with signing in.
             if not _looks_like_login_required(err):
                 last_err = err
+
+    # Last resort before giving up: yt-dlp may simply not know this site.
+    # Read the page, and if it embeds media, point yt-dlp at that instead.
+    # Guarded on _resolved so a page whose media URL is itself unplayable
+    # cannot bounce back in here and recurse.
+    if not _resolved and _looks_unsupported(last_err):
+        embedded = resolve_page_media(url)
+        if embedded and embedded != url:
+            return download_video(
+                embedded,
+                dest_dir,
+                quality=quality,
+                progress_hook=progress_hook,
+                audio_only=audio_only,
+                _resolved=True,
+            )
 
     raise _friendly_error(last_err)
 

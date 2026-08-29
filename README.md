@@ -35,7 +35,11 @@ handling, and bandwidth throttling (see "What's been tested" below).
   Audio, Images, or Other folders inside `~/Downloads/VDR`.
 - **Video/stream capture** — powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp), the
   actively maintained open-source extractor used by many real download tools, for
-  YouTube and hundreds of other sites.
+  YouTube and hundreds of other sites. When yt-dlp does not recognise a site, VDR
+  reads the page itself and hands yt-dlp the media it embeds — enough for course
+  platforms that pass their player a URL from inside a JSON blob, where yt-dlp
+  otherwise answers "Unsupported URL". It runs no JavaScript and does nothing to
+  get past a login or any form of protection.
 - **Browser integration** — a Manifest V3 extension for Chrome/Edge/Brave/Opera/Vivaldi,
   Firefox, and Safari that can:
   - intercept the browser's native downloads and hand them to this app instead
