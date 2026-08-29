@@ -65,6 +65,35 @@ class TokenBucket:
 
 
 @dataclass
+class PageNotAFile(Exception):
+    """The URL serves a web page, not a downloadable file.
+
+    Saving it anyway is the worst outcome available: the download "succeeds",
+    and what lands is ~130 KB of markup wearing the page's name. That is
+    exactly what happened with course pages -- five copies of
+    `agentic-ai-applications` in Downloads/VDR/Other, each one the HTML.
+
+    Carries the URL so the caller can do the useful thing instead: look inside
+    the page for the media it embeds.
+    """
+
+    def __init__(self, url: str):
+        super().__init__("This link is a web page, not a file.")
+        self.url = url
+
+
+def _reject_web_page(content_type, url):
+    """Raise if the server is offering markup rather than a file.
+
+    Deliberately narrow. Only text/html and application/xhtml+xml count --
+    application/xml and application/json are left alone, since those are
+    legitimately downloadable and some servers mislabel media with them.
+    """
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    if ct in ("text/html", "application/xhtml+xml"):
+        raise PageNotAFile(url)
+
+
 class SegmentState:
     index: int
     start: int
@@ -99,6 +128,8 @@ class DownloadTask:
         self.segments: List[SegmentState] = []
         self.status = Status.QUEUED
         self.error_message = ""
+        # Set when the server answered with markup instead of a file.
+        self.is_web_page = False
 
         self.pause_event = threading.Event()
         self.pause_event.set()  # set = running, cleared = paused
@@ -121,12 +152,14 @@ class DownloadTask:
     def _probe(self):
         resp = requests.head(self.url, headers=self.headers, allow_redirects=True, timeout=15)
         resp.raise_for_status()
+        _reject_web_page(resp.headers.get("Content-Type"), self.url)
         cl = resp.headers.get("Content-Length")
         self.total_size = int(cl) if cl else None
         self.accept_ranges = resp.headers.get("Accept-Ranges", "").lower() == "bytes"
         if self.total_size is None:
             with requests.get(self.url, headers=self.headers, stream=True, timeout=15) as r:
                 r.raise_for_status()
+                _reject_web_page(r.headers.get("Content-Type"), self.url)
                 cl = r.headers.get("Content-Length")
                 if cl:
                     self.total_size = int(cl)
@@ -259,6 +292,12 @@ class DownloadTask:
                 self._cleanup_state()
             elif self.status != Status.ERROR:
                 self._set_status(Status.ERROR, "Incomplete download")
+        except PageNotAFile as e:
+            # Flagged rather than only described, so the UI can do the useful
+            # thing -- look inside the page for its media -- instead of making
+            # the user read an error and retry by hand.
+            self.is_web_page = True
+            self._set_status(Status.ERROR, str(e))
         except Exception as e:
             self._set_status(Status.ERROR, str(e))
 

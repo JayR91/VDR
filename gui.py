@@ -161,6 +161,7 @@ class App:
         self.qm.set_update_callback(lambda task: self._events.put(("task", task)))
         self.row_by_task = {}
         self._completed_handled = set()
+        self._rerouted = set()
         # Tasks the user removed. Removing one cancels it, and that status
         # change queues an update event -- without this, draining that event
         # would re-add the row that was just deleted (see remove_selected).
@@ -455,6 +456,28 @@ class App:
         task.start_fn = lambda: threading.Thread(target=run, daemon=True).start()
         task.start_fn()
 
+    def _reroute_page(self, task):
+        """Re-queue a page URL as a video, and drop the failed file row."""
+        url = task.url
+        try:
+            self.qm.remove(task)
+        except Exception:
+            pass
+        iid = self.row_by_task.pop(task, None)
+        if iid:
+            try:
+                self.tree.delete(iid)
+            except tk.TclError:
+                pass
+        # Leave the partial file behind rather than a stub of markup.
+        try:
+            if os.path.exists(task.dest_path) and os.path.getsize(task.dest_path) == 0:
+                os.remove(task.dest_path)
+        except OSError:
+            pass
+        self.set_server_status(f"That link is a page — looking inside it for media…", "black")
+        self.queue_video(url)
+
     def _add_row(self, task):
         iid = self.tree.insert("", "end", values=(
             os.path.basename(task.dest_path), "?", "0%", "-", task.status.value))
@@ -504,6 +527,18 @@ class App:
             if task.status == Status.COMPLETED and task not in self._completed_handled:
                 self._completed_handled.add(task)
                 self._handle_completion(task)
+            # A link that turned out to be a web page: hand it to the video
+            # path, which reads the page and downloads the media it embeds.
+            # Without this the user gets an error for a link that VDR can in
+            # fact handle -- and before the engine started refusing markup,
+            # got a 133 KB file that was the page itself.
+            if (
+                task.status == Status.ERROR
+                and getattr(task, "is_web_page", False)
+                and task not in self._rerouted
+            ):
+                self._rerouted.add(task)
+                self._reroute_page(task)
         # A percentage is more useful for one download; otherwise match Mail's count.
         if len(active) == 1 and active[0].total_size:
             badge = str(round(active[0].bytes_downloaded() / active[0].total_size * 100))

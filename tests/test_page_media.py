@@ -62,8 +62,32 @@ check("a .jpg is not treated as media", not any(x.endswith(".jpg") for x in foun
 check("boundary: .webmanifest is not media",
       not page_media._ABSOLUTE.findall('<link href="https://e.com/site.webmanifest">'))
 
+# --- the engine must never save a web page as a file ------------------------
+import engine
+
+def _ct(value):
+    """Would the engine accept this Content-Type as a downloadable file?"""
+    try:
+        engine._reject_web_page(value, "https://e.com/x")
+        return True
+    except engine.PageNotAFile:
+        return False
+
 print()
+check("text/html is refused", not _ct("text/html"))
+check("text/html with charset is refused", not _ct("text/html; charset=utf-8"))
+check("application/xhtml+xml is refused", not _ct("application/xhtml+xml"))
+check("video/mp4 is allowed", _ct("video/mp4"))
+check("application/x-mpegURL is allowed", _ct("application/x-mpegURL"))
+check("application/zip is allowed", _ct("application/zip"))
+check("application/pdf is allowed", _ct("application/pdf"))
+# Left alone deliberately: legitimately downloadable, and some servers
+# mislabel media with them.
+check("application/json is allowed", _ct("application/json"))
+check("application/xml is allowed", _ct("application/xml"))
+check("a missing Content-Type is allowed", _ct(None))
+
 if failures:
-    print(f"FAIL - {len(failures)} check(s): " + ", ".join(failures))
+    print(f"\nFAIL - {len(failures)} check(s): " + ", ".join(failures))
     sys.exit(1)
-print("PASS - page media selection")
+print("\nPASS - page media selection + web-page guard")
