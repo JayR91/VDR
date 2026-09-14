@@ -25,8 +25,13 @@ for _name in ("ffmpeg.exe", "ffprobe.exe"):
 # yt-dlp loads extractors and locale data at runtime; a frozen build that
 # only follows static imports raises inside YoutubeDL and surfaces as
 # PyInstaller's "Unhandled exception in script" with no useful window.
-_hidden = ["pystray._win32", "PIL._tkinter_finder"] + collect_submodules("yt_dlp")
-_datas = collect_data_files("yt_dlp")
+_hidden = ["pystray._win32", "PIL._tkinter_finder", "extension_install"] + collect_submodules("yt_dlp")
+_datas = collect_data_files("yt_dlp") + [
+    # Unpacked Chromium extension. Setup copies this to %LOCALAPPDATA%\VDR
+    # and VDR.exe --install-browser-extension registers it so the ⬇ VDR
+    # latch appears on videos without a manual "Load unpacked".
+    ("browser_extension", "browser_extension"),
+]
 
 
 a = Analysis(

@@ -63,7 +63,9 @@ jobs:
         # Cheap guard against the port regressing: this is the suite that
         # pins gui.py's integration surface and the Win32 power/idle probes,
         # and here it runs on an actual Windows host.
-        run: python tests/test_cross_platform.py
+        run: |
+          python tests/test_cross_platform.py
+          python tests/test_extension_install.py
 
       - name: Build EXE and installer
         shell: pwsh

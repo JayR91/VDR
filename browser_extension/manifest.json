@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "VDR Connector",
   "version": "1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApz6KgA0DDlT2yEBOw0GFPwxhPiXeZc826MUDvBW2ZcZwor/rDrtyaCOYxXF4y8STP57T+TIHS442biHUeTYEqj8MAHbD1ghrt4E1IpJdSEojEkEIcG5ygmEvshoUuSC3SQzDmzVChH/d8GGiEEAwiKqQ/waZgKMTVI731rtreJKOPKplrCA2kObIKJi/aZWtBJKZLSPFaDrB91QJw2yslJJiuY0cItvscABXtdgpCutfqQRYwz121TUWLDBD8Oz6wEBBizEnwNji1wFx9GCzvtHqDytjx78IWK0a3bCCJ5x1STt1mRBZunoziHf+6c4IdD9pF/+4+7YGAdTpgl51swIDAQAB",
   "description": "Send downloads and video links from your browser to your local VDR download manager.",
   "permissions": [
     "downloads",

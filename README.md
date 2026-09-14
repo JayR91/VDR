@@ -85,11 +85,14 @@ failed after you chose “install for all users”, that path needed admin right
 the unsigned installer does not have — run Setup again and keep the default
 per-user location.
 
-If launch shows **Unhandled exception in script**, the windowed PyInstaller
-build crashed before the UI came up. v2.2.1 did that on Windows by registering
-a macOS-only Tk command. Until a newer Setup is published, run from source
-(`pip install -r requirements.txt` then `python main.py`) or look at
-`%LOCALAPPDATA%\VDR\crash.log` on builds that include the crash reporter.
+Setup also copies the browser extension to `%LOCALAPPDATA%\VDR\extension-chrome`
+and registers it with Chrome/Edge/Brave. **Keep VDR running** (tray is fine)
+and **fully quit Chrome once** after Setup — the floating **⬇ VDR** button then
+appears on the video player. That button is the browser latch; the VDR window
+itself has no on-video control. Download failures are shown in the VDR window
+(and a notification). `%LOCALAPPDATA%\VDR\crash.log` is only written if the
+app crashes on startup, so a failed YouTube download with no crash.log is
+expected.
 
 ## Running the app
 
@@ -107,7 +110,9 @@ localhost — nothing external can reach it).
 - **+ Add URL** — paste a direct file link, pick a save location and number of
   segments (default 8).
 - **+ Add Video/Stream** — paste a video page URL (YouTube, etc.); this uses yt-dlp
-  in the background and saves into `~/Downloads/VDR`.
+  in the background and saves into `~/Downloads/VDR`. It does **not** put a
+  button on the website's player — that **⬇ VDR** latch is the browser
+  extension (Windows Setup registers it; see below).
 - Select a row to **Pause / Resume / Cancel / Remove / Open Folder**.
 - Set a global **speed limit** in KB/s (0 = unlimited) and click Apply.
 - Turn on **Focus Guard** to pause on battery and slow down while you are at the keyboard.
@@ -153,6 +158,35 @@ Both platforms are built and published automatically by
 
 ## Installing the browser extension
 
+The floating **⬇ VDR** button on a video (the latch) is the browser extension,
+not a control in the desktop window. **+ Add Video/Stream** queues a download
+in the list; it does not show a player or that button.
+
+### Windows (Setup does this)
+
+Windows Setup copies the unpacked Chromium extension to
+`%LOCALAPPDATA%\VDR\extension-chrome` and registers it:
+
+- Chrome / Edge / Brave **External Extensions** keys under HKCU
+- a DevTools “load unpacked” into your default Chrome profile (same result as
+  chrome://extensions → Load unpacked, without that UI)
+- Firefox policy + XPI for ESR / Developer Edition
+
+After Setup: leave **VDR running** (it is in the tray if you closed the
+window; Start-at-sign-in is on by default so the local server is up), then
+**fully quit and reopen Chrome** once if it was open during Setup. The ⬇ VDR
+button then sits on the player. You do not need to load unpacked by hand.
+
+If Chrome was running during Setup, VDR asks it to quit briefly so it can
+attach; if Chrome stayed open, quit it fully and start VDR once — it finishes
+registration when Chrome is closed.
+
+Developers running from source on Windows can run
+`python scripts/build_extension.py` (writes the same `%LOCALAPPDATA%\VDR`
+tree) and `python main.py --install-browser-extension`.
+
+### macOS / from source
+
 `browser_extension/` is the shared source. Safari needs a one-time conversion into a
 native app wrapper (Apple requires this — there's no "load unpacked" for Safari).
 In all cases, make sure the desktop app (`main.py`, or the installed `.app`) is running
@@ -166,28 +200,37 @@ python3 scripts/build_extension.py
 
 That writes ready-to-load copies to a stable location:
 
-- Chromium: `~/Library/Application Support/VDR/extension-chrome`
-- Firefox: `~/Library/Application Support/VDR/extension-firefox`
+- Chromium (macOS): `~/Library/Application Support/VDR/extension-chrome`
+- Chromium (Windows): `%LOCALAPPDATA%\VDR\extension-chrome`
+- Firefox: next to the Chromium copy, as `extension-firefox`
 
-**Load from those paths, not from `browser_extension/` in the checkout.** Chromium
+**On macOS, load from those paths, not from `browser_extension/` in the checkout.** Chromium
 records the on-disk path of an unpacked extension and silently disables it if that path
 ever moves — so loading it out of a source tree means renaming or relocating the repo
 breaks the extension, and the floating button just stops appearing. Re-run the script
 after changing extension code.
 
-### Chrome, Edge, Brave, Opera, Vivaldi (Chromium)
+### Chrome, Edge, Brave, Opera, Vivaldi (Chromium) — macOS / Linux only
+
+Windows Setup registers the latch; skip this section there.
 
 1. Open `chrome://extensions` (`edge://extensions`, `brave://extensions`, etc).
 2. Turn on **Developer mode** (top right).
-3. Click **Load unpacked** and select
-   `~/Library/Application Support/VDR/extension-chrome`.
+3. Click **Load unpacked** and select the Chromium path printed by
+   `scripts/build_extension.py`.
 
 ### Firefox
 
+On Windows, Setup writes an HKCU Firefox policy pointing at
+`%LOCALAPPDATA%\VDR\extension-firefox.xpi` (works on ESR / Developer Edition
+without a Chrome-style domain join). Firefox Release still requires a signed
+XPI for a permanent add-on.
+
+From source / macOS:
+
 1. Open `about:debugging#/runtime/this-firefox`.
-2. Click **Load Temporary Add-on…** and select
-   `~/Library/Application Support/VDR/extension-firefox/manifest.json`
-   directly (not the folder).
+2. Click **Load Temporary Add-on…** and select `extension-firefox/manifest.json`
+   from the path `scripts/build_extension.py` printed.
 3. This load is temporary — Firefox drops it on restart. For a permanent install,
    the extension needs to be signed by Mozilla (`web-ext sign`) or Firefox needs to be
    on the Developer/Nightly channel with `xpinstall.signatures.required` disabled.

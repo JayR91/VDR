@@ -62,12 +62,20 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "startupicon"; Description: "Start VDR when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
+; Checked by default: the ⬇ VDR latch in Chrome talks to the local server,
+; which only runs while VDR is up (window or tray).
+Name: "startupicon"; Description: "Start VDR when I sign in (needed for the video button in Chrome)"; GroupDescription: "Startup:"
 
 [Files]
 ; The whole PyInstaller COLLECT tree -- the exe plus its Python runtime,
-; and ffmpeg/ffprobe when the build fetched them.
+; and ffmpeg/ffprobe when the build fetched them. Includes browser_extension\
+; next to VDR.exe for --install-browser-extension to copy from.
 Source: "dist\VDR\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Stable path Chrome keeps loaded across app upgrades (same tree as crash.log).
+; PyInstaller 6 onedir puts datas under _internal\; older layouts put them
+; next to the exe. skipifsourcedoesntexist keeps either freeze working.
+Source: "dist\VDR\_internal\browser_extension\*"; DestDir: "{localappdata}\VDR\extension-chrome"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "dist\VDR\browser_extension\*"; DestDir: "{localappdata}\VDR\extension-chrome"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#VDRName}"; Filename: "{app}\{#VDRExe}"
@@ -76,9 +84,19 @@ Name: "{userdesktop}\{#VDRName}"; Filename: "{app}\{#VDRExe}"; Tasks: desktopico
 Name: "{userstartup}\{#VDRName}"; Filename: "{app}\{#VDRExe}"; Tasks: startupicon
 
 [Run]
+; Register the Chromium latch *before* launching the GUI so the first Chrome
+; restart after Setup already sees it. Hidden: this is a file/registry copy,
+; not a second window.
+Filename: "{app}\{#VDRExe}"; Parameters: "--install-browser-extension"; StatusMsg: "Registering the ⬇ VDR button in Chrome…"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#VDRExe}"; Description: "{cm:LaunchProgram,{#StringChange(VDRName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{app}\{#VDRExe}"; Parameters: "--uninstall-browser-extension"; Flags: runhidden waituntilterminated; RunOnceId: "VDRUnregExt"
 
 [UninstallDelete]
 ; PyInstaller writes __pycache__ next to the app on first run; without this
 ; the uninstaller leaves the install directory behind.
 Type: filesandordirs; Name: "{app}\__pycache__"
+Type: filesandordirs; Name: "{localappdata}\VDR\extension-chrome"
+Type: filesandordirs; Name: "{localappdata}\VDR\extension-firefox"
+Type: files; Name: "{localappdata}\VDR\extension-firefox.xpi"
