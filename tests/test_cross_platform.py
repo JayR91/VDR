@@ -176,11 +176,11 @@ check("crash log is under .vdr off-Windows", log_path.endswith(os.path.join(".vd
 real_platform = sys.platform
 try:
     sys.platform = "win32"
-    os.environ["LOCALAPPDATA"] = r"C:\\Users\\test\\AppData\\Local"
+    os.environ["LOCALAPPDATA"] = r"C:\Users\test\AppData\Local"
     win_path = crash_report.crash_log_path()
     check(
         "crash log is under LOCALAPPDATA on Windows",
-        win_path == os.path.join(r"C:\\Users\\test\\AppData\\Local", "VDR", "crash.log"),
+        win_path == os.path.join(r"C:\Users\test\AppData\Local", "VDR", "crash.log"),
     )
 finally:
     sys.platform = real_platform
