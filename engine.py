@@ -94,6 +94,7 @@ def _reject_web_page(content_type, url):
         raise PageNotAFile(url)
 
 
+@dataclass
 class SegmentState:
     index: int
     start: int
@@ -219,7 +220,17 @@ class DownloadTask:
             return sum(s.downloaded for s in self.segments)
 
     def _all_segments_complete(self) -> bool:
-        return all((s.end != -1 and s.start + s.downloaded > s.end) for s in self.segments)
+        if not self.segments:
+            return False
+        # Single-connection fallback uses end=-1; compare against Content-Length
+        # when we have it, otherwise any bytes plus a finished thread is enough.
+        if self.total_size is not None:
+            return self.bytes_downloaded() >= self.total_size
+        return all(
+            (s.end == -1 and s.downloaded > 0)
+            or (s.end != -1 and s.start + s.downloaded > s.end)
+            for s in self.segments
+        )
 
     # ---------- lifecycle ----------
 
