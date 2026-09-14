@@ -10,6 +10,8 @@ of `if sys.platform` -- and lets scripts/build_dmg.sh keep working untouched.
 
 import os
 
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
 # ffmpeg is fetched next to the spec by scripts/build_windows.ps1 before this
 # runs. Bundling it is what lets a downloaded VDR merge separate video and
 # audio streams (most YouTube 1080p+) without the user installing anything.
@@ -20,16 +22,22 @@ for _name in ("ffmpeg.exe", "ffprobe.exe"):
     if os.path.exists(_name):
         _binaries.append((_name, "."))
 
+# yt-dlp loads extractors and locale data at runtime; a frozen build that
+# only follows static imports raises inside YoutubeDL and surfaces as
+# PyInstaller's "Unhandled exception in script" with no useful window.
+_hidden = ["pystray._win32", "PIL._tkinter_finder"] + collect_submodules("yt_dlp")
+_datas = collect_data_files("yt_dlp")
+
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=_binaries,
-    datas=[],
+    datas=_datas,
     # pystray picks its backend at runtime via importlib, so PyInstaller's
     # static analysis never sees the Win32 one and silently ships a build
     # whose tray icon can't start.
-    hiddenimports=['pystray._win32', 'PIL._tkinter_finder'],
+    hiddenimports=_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

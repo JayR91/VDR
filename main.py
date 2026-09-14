@@ -1,6 +1,7 @@
 import os
 import threading
 import sys
+import traceback
 import tkinter as tk
 
 
@@ -90,5 +91,27 @@ def main():
     root.mainloop()
 
 
+from crash_report import write_crash_log
+
+
+def report_crash(text: str) -> None:
+    path = write_crash_log(text)
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        body = text[-2000:]
+        if path:
+            body += f"\n\nSaved to:\n{path}"
+        from tkinter import messagebox
+        messagebox.showerror("VDR failed to start", body)
+        root.destroy()
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        report_crash(traceback.format_exc())
+        sys.exit(1)
