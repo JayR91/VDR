@@ -171,10 +171,18 @@ check(
 
 import crash_report
 
-log_path = crash_report.crash_log_path()
-check("crash log is under .vdr off-Windows", log_path.endswith(os.path.join(".vdr", "crash.log")))
+# Host-independent: pin both branches of crash_log_path() by mocking
+# sys.platform. The .vdr assertion used to run against the real host path
+# first, so Windows CI failed even though LOCALAPPDATA dispatch was correct.
 real_platform = sys.platform
+saved_localappdata = os.environ.get("LOCALAPPDATA")
 try:
+    sys.platform = "darwin"
+    posix_path = crash_report.crash_log_path()
+    check(
+        "crash log is under .vdr off-Windows",
+        posix_path.endswith(os.path.join(".vdr", "crash.log")),
+    )
     sys.platform = "win32"
     os.environ["LOCALAPPDATA"] = r"C:\Users\test\AppData\Local"
     win_path = crash_report.crash_log_path()
@@ -184,6 +192,10 @@ try:
     )
 finally:
     sys.platform = real_platform
+    if saved_localappdata is None:
+        os.environ.pop("LOCALAPPDATA", None)
+    else:
+        os.environ["LOCALAPPDATA"] = saved_localappdata
 
 print()
 if failures:
