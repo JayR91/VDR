@@ -68,7 +68,7 @@ class TokenBucket:
 class PageNotAFile(Exception):
     """The URL serves a web page, not a downloadable file.
 
-    Saving it anyway is the worst outcome available: the download \"succeeds\",
+    Saving it anyway is the worst outcome available: the download "succeeds",
     and what lands is ~130 KB of markup wearing the page's name. That is
     exactly what happened with course pages -- five copies of
     `agentic-ai-applications` in Downloads/VDR/Other, each one the HTML.
@@ -78,7 +78,7 @@ class PageNotAFile(Exception):
     """
 
     def __init__(self, url: str):
-        super().__init__(\"This link is a web page, not a file.\")
+        super().__init__("This link is a web page, not a file.")
         self.url = url
 
 
@@ -89,8 +89,8 @@ def _reject_web_page(content_type, url):
     application/xml and application/json are left alone, since those are
     legitimately downloadable and some servers mislabel media with them.
     """
-    ct = (content_type or \"\").split(\";\", 1)[0].strip().lower()
-    if ct in (\"text/html\", \"application/xhtml+xml\"):
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    if ct in ("text/html", "application/xhtml+xml"):
         raise PageNotAFile(url)
 
 
@@ -116,7 +116,7 @@ class DownloadTask:
     ):
         self.url = url
         self.dest_path = dest_path
-        self.state_path = dest_path + \".vdrstate.json\"
+        self.state_path = dest_path + ".vdrstate.json"
         self.num_segments = num_segments
         self.headers = headers or {}
         self.max_retries = max_retries
@@ -128,7 +128,7 @@ class DownloadTask:
         self.accept_ranges = False
         self.segments: List[SegmentState] = []
         self.status = Status.QUEUED
-        self.error_message = \"\"
+        self.error_message = ""
         # Set when the server answered with markup instead of a file.
         self.is_web_page = False
 
@@ -144,7 +144,7 @@ class DownloadTask:
 
     # ---------- status / persistence ----------
 
-    def _set_status(self, status: Status, error: str = \"\"):
+    def _set_status(self, status: Status, error: str = ""):
         self.status = status
         self.error_message = error
         if self.status_cb:
@@ -153,18 +153,18 @@ class DownloadTask:
     def _probe(self):
         resp = requests.head(self.url, headers=self.headers, allow_redirects=True, timeout=15)
         resp.raise_for_status()
-        _reject_web_page(resp.headers.get(\"Content-Type\"), self.url)
-        cl = resp.headers.get(\"Content-Length\")
+        _reject_web_page(resp.headers.get("Content-Type"), self.url)
+        cl = resp.headers.get("Content-Length")
         self.total_size = int(cl) if cl else None
-        self.accept_ranges = resp.headers.get(\"Accept-Ranges\", \"\").lower() == \"bytes\"
+        self.accept_ranges = resp.headers.get("Accept-Ranges", "").lower() == "bytes"
         if self.total_size is None:
             with requests.get(self.url, headers=self.headers, stream=True, timeout=15) as r:
                 r.raise_for_status()
-                _reject_web_page(r.headers.get(\"Content-Type\"), self.url)
-                cl = r.headers.get(\"Content-Length\")
+                _reject_web_page(r.headers.get("Content-Type"), self.url)
+                cl = r.headers.get("Content-Length")
                 if cl:
                     self.total_size = int(cl)
-                if r.headers.get(\"Accept-Ranges\", \"\").lower() == \"bytes\":
+                if r.headers.get("Accept-Ranges", "").lower() == "bytes":
                     self.accept_ranges = True
 
     def _load_state(self) -> bool:
@@ -172,8 +172,8 @@ class DownloadTask:
             try:
                 with open(self.state_path) as f:
                     data = json.load(f)
-                self.total_size = data[\"total_size\"]
-                self.segments = [SegmentState(**s) for s in data[\"segments\"]]
+                self.total_size = data["total_size"]
+                self.segments = [SegmentState(**s) for s in data["segments"]]
                 return True
             except Exception:
                 return False
@@ -182,13 +182,13 @@ class DownloadTask:
     def _save_state(self):
         with self.lock:
             data = {
-                \"url\": self.url,
-                \"total_size\": self.total_size,
-                \"segments\": [s.__dict__ for s in self.segments],
+                "url": self.url,
+                "total_size": self.total_size,
+                "segments": [s.__dict__ for s in self.segments],
             }
         try:
-            tmp = self.state_path + \".tmp\"
-            with open(tmp, \"w\") as f:
+            tmp = self.state_path + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump(data, f)
             os.replace(tmp, self.state_path)
         except Exception:
@@ -247,13 +247,13 @@ class DownloadTask:
             if not resumed:
                 self._probe()
                 self._init_segments()
-                os.makedirs(os.path.dirname(self.dest_path) or \".\", exist_ok=True)
-                with open(self.dest_path, \"wb\") as f:
+                os.makedirs(os.path.dirname(self.dest_path) or ".", exist_ok=True)
+                with open(self.dest_path, "wb") as f:
                     if self.total_size:
                         f.truncate(self.total_size)
                 self._save_state()
             elif not os.path.exists(self.dest_path):
-                with open(self.dest_path, \"wb\") as f:
+                with open(self.dest_path, "wb") as f:
                     if self.total_size:
                         f.truncate(self.total_size)
 
@@ -302,7 +302,7 @@ class DownloadTask:
                 self._set_status(Status.COMPLETED)
                 self._cleanup_state()
             elif self.status != Status.ERROR:
-                self._set_status(Status.ERROR, \"Incomplete download\")
+                self._set_status(Status.ERROR, "Incomplete download")
         except PageNotAFile as e:
             # Flagged rather than only described, so the UI can do the useful
             # thing -- look inside the page for its media -- instead of making
@@ -326,13 +326,13 @@ class DownloadTask:
                 if seg.end != -1:
                     if range_start > seg.end:
                         return
-                    headers[\"Range\"] = f\"bytes={range_start}-{seg.end}\"
+                    headers["Range"] = f"bytes={range_start}-{seg.end}"
                 elif range_start > 0:
-                    headers[\"Range\"] = f\"bytes={range_start}-\"
+                    headers["Range"] = f"bytes={range_start}-"
 
                 with requests.get(self.url, headers=headers, stream=True, timeout=30) as r:
                     r.raise_for_status()
-                    with open(self.dest_path, \"r+b\") as f:
+                    with open(self.dest_path, "r+b") as f:
                         f.seek(range_start)
                         for chunk in r.iter_content(chunk_size=65536):
                             if self.cancel_event.is_set():
@@ -353,7 +353,7 @@ class DownloadTask:
             except Exception as e:
                 attempt += 1
                 if attempt > self.max_retries:
-                    self._set_status(Status.ERROR, f\"Segment {seg.index} failed after {self.max_retries} retries: {e}\")
+                    self._set_status(Status.ERROR, f"Segment {seg.index} failed after {self.max_retries} retries: {e}")
                     return
                 # wait() (not sleep()) so a cancel during backoff takes effect
                 # immediately instead of leaving Cancel looking hung for up to 30s.
