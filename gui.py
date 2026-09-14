@@ -12,7 +12,7 @@ from queue_manager import QueueManager
 from engine import Status
 import video_capture
 from organizer import categorized_destination, organize_completed_file
-from desktop_integration import create_integration
+from desktop_integration import bind_macos_reopen, create_integration
 from focus_guard import FocusGuard, POLICY_HOLD
 
 DEFAULT_DIR = os.path.expanduser("~/Downloads/VDR")
@@ -267,9 +267,9 @@ class App:
         self.show_window()
         # Clicking the Dock icon while the app is already running (window
         # hidden) sends macOS's "reopen" event -- Tk's Cocoa port dispatches
-        # that to this specific Tcl command name if it exists. Without this,
-        # only the menu-bar "Show VDR" item could bring the window back.
-        self.root.createcommand("::tk::mac::ReopenApplication", self.show_window)
+        # that to this specific Tcl command name if it exists. Windows Tk has
+        # no ::tk::mac namespace; registering it there crashes startup.
+        bind_macos_reopen(self.root, self.show_window)
         # Closing the window hides it rather than quitting -- downloads and
         # the local server (for the browser extension) keep running in the
         # background, exactly like closing Slack/Mail's window doesn't quit
