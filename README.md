@@ -85,6 +85,12 @@ failed after you chose “install for all users”, that path needed admin right
 the unsigned installer does not have — run Setup again and keep the default
 per-user location.
 
+If launch shows **Unhandled exception in script**, the windowed PyInstaller
+build crashed before the UI came up. v2.2.1 did that on Windows by registering
+a macOS-only Tk command. Until a newer Setup is published, run from source
+(`pip install -r requirements.txt` then `python main.py`) or look at
+`%LOCALAPPDATA%\VDR\crash.log` on builds that include the crash reporter.
+
 ## Running the app
 
 ```bash
