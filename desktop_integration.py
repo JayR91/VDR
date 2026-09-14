@@ -41,6 +41,24 @@ class NullIntegration:
         return
 
 
+def bind_macos_reopen(root, callback, system=None):
+    """Register Tk's Dock-reopen handler. Must not run off macOS.
+
+    Cocoa Tk delivers a click on the Dock icon as the Tcl command
+    ``::tk::mac::ReopenApplication``. That namespace does not exist on
+    Windows (or Linux) Tk; ``createcommand`` then raises TclError and
+    aborts ``App.__init__``. After a successful Setup.exe the window
+    never appears, which looks like the installer did nothing.
+    """
+    if (system or platform.system()) != "Darwin":
+        return False
+    try:
+        root.createcommand("::tk::mac::ReopenApplication", callback)
+        return True
+    except Exception:
+        return False
+
+
 def create_integration(add_url_callback=None, show_callback=None, quit_callback=None):
     system = platform.system()
     if system == "Darwin":

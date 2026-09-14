@@ -67,15 +67,29 @@ Prebuilt installers for both platforms are attached to every
 
 - **macOS** — `VDR-<version>-macOS-Installer.dmg`. Open it and drag VDR to
   Applications.
-- **Windows** — `VDR-<version>-Windows-Setup.exe`. It installs per-user, so it
-  needs no administrator rights and raises no UAC prompt.
+- **Windows** — `VDR-<version>-Windows-Setup.exe`. It installs **for your user
+  only** (no Administrator / UAC). That is the Windows desktop app, not the
+  Android APK.
 
 Each filename names its own platform, so there is nothing to work out from the
 extension.
 
 Neither build is code-signed, so both operating systems will warn on first launch.
-On macOS use right-click → Open. On Windows, SmartScreen shows "Windows protected your
-PC" — choose **More info → Run anyway**.
+On macOS use right-click → Open. On Windows, SmartScreen shows **Windows protected
+your PC** — you must click **More info → Run anyway**. Closing that dialog
+cancels Setup; nothing is installed.
+
+After Setup finishes, look for **VDR** on the desktop and in the Start menu.
+The files live in `%LOCALAPPDATA%\Programs\VDR` (not Program Files). If Setup
+failed after you chose “install for all users”, that path needed admin rights
+the unsigned installer does not have — run Setup again and keep the default
+per-user location.
+
+If launch shows **Unhandled exception in script**, the windowed PyInstaller
+build crashed before the UI came up. v2.2.1 did that on Windows by registering
+a macOS-only Tk command. Until a newer Setup is published, run from source
+(`pip install -r requirements.txt` then `python main.py`) or look at
+`%LOCALAPPDATA%\VDR\crash.log` on builds that include the crash reporter.
 
 ## Running the app
 
