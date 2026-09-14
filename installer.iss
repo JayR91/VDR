@@ -33,7 +33,10 @@ AppPublisher={#VDRPublisher}
 AppPublisherURL={#VDRURL}
 AppSupportURL={#VDRURL}/issues
 AppUpdatesURL={#VDRURL}/releases
-DefaultDirName={autopf}\{#VDRName}
+; Always the per-user Programs folder. {autopf} plus an "install for all
+; users" override writes to Program Files; an unsigned installer then hits
+; UAC or Access Denied and Setup appears to have done nothing.
+DefaultDirName={localappdata}\Programs\{#VDRName}
 DefaultGroupName={#VDRName}
 DisableProgramGroupPage=yes
 LicenseFile=LICENSE
@@ -46,9 +49,9 @@ UninstallDisplayIcon={app}\{#VDRExe}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-; Per-user install: no elevation, no UAC prompt.
+; Per-user install: no elevation, no UAC prompt. Do not offer all-users.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+UsePreviousPrivileges=no
 ; The frozen app is 64-bit because the CI runner's Python is; saying so keeps
 ; it out of the 32-bit Program Files redirect.
 ArchitecturesAllowed=x64compatible
@@ -58,7 +61,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "startupicon"; Description: "Start VDR when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
@@ -69,7 +72,7 @@ Source: "dist\VDR\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs crea
 [Icons]
 Name: "{group}\{#VDRName}"; Filename: "{app}\{#VDRExe}"
 Name: "{group}\{cm:UninstallProgram,{#VDRName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#VDRName}"; Filename: "{app}\{#VDRExe}"; Tasks: desktopicon
+Name: "{userdesktop}\{#VDRName}"; Filename: "{app}\{#VDRExe}"; Tasks: desktopicon
 Name: "{userstartup}\{#VDRName}"; Filename: "{app}\{#VDRExe}"; Tasks: startupicon
 
 [Run]
