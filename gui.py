@@ -286,6 +286,8 @@ class App:
         self.root.after(200, self._drain_events)
         self.root.after(500, self._refresh)
         self.root.after(1500, self._sync_system_theme)
+        if platform.system() == "Windows":
+            self.root.after(900, self._ensure_windows_extension)
 
     def _system_is_dark(self):
         # os.uname() is Unix-only -- calling it on Windows raises
@@ -664,6 +666,33 @@ class App:
         kb = int(float(value))
         self.speed_var.set(str(kb))
         self.qm.set_speed_limit(kb * 1024 if kb else None)
+
+    def _ensure_windows_extension(self):
+        """Refresh the ⬇ VDR latch files/registry; load into Chrome if it is closed.
+
+        Setup already ran this. Doing it again on launch picks up upgrades and
+        finishes registration if Chrome was busy during Setup. Never force-kills
+        a running browser from the GUI — that would drop the user's tabs.
+        """
+        def work():
+            try:
+                import extension_install
+                chrome_running = extension_install._process_running("chrome.exe")
+                result = extension_install.ensure_installed(
+                    try_cdp=True,
+                    close_browser_if_needed=False,
+                    launch_if_needed=not chrome_running,
+                )
+                if result.get("needs_browser_restart"):
+                    self._events.put((
+                        "info",
+                        "Restart Chrome once to show the ⬇ VDR button on videos. "
+                        "VDR already registered the extension; Chrome has to be "
+                        "fully quit (not just the window) to pick it up.",
+                    ))
+            except Exception:
+                pass
+        threading.Thread(target=work, daemon=True).start()
 
     def _toggle_focus_guard(self):
         self.focus_guard.set_enabled(self.focus_var.get())

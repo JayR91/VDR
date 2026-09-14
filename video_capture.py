@@ -93,10 +93,25 @@ def looks_like_video_url(url: str) -> bool:
     return False
 
 
-# Browsers whose cookie stores are tried, in order, when a site demands a
-# logged-in session. Reading these can prompt for Keychain access on macOS,
-# which is why it's a last resort rather than the default path.
-_COOKIE_BROWSERS = ("safari", "chrome", "firefox")
+def cookie_browsers(platform: Optional[str] = None) -> tuple:
+    """Browsers whose cookie stores are tried, in order, when a site demands
+    a logged-in session.
+
+    Reading these can prompt for Keychain access on macOS, which is why it's
+    a last resort rather than the default path. On Windows, Safari is not a
+    browser, and Chrome 127+ app-bound encryption usually fails to decrypt
+    cookies — Firefox (then Edge) is the order that actually works.
+    """
+    plat = sys.platform if platform is None else platform
+    if plat == "win32":
+        return ("firefox", "edge", "chrome", "brave")
+    if plat == "darwin":
+        return ("safari", "chrome", "firefox")
+    return ("firefox", "chrome", "chromium")
+
+
+# Back-compat alias for anything that imported the old tuple.
+_COOKIE_BROWSERS = cookie_browsers()
 
 # Default ceiling on video height. See download_video() for why this exists.
 MAX_HEIGHT = 1080
@@ -223,7 +238,7 @@ def download_video(
     # the macOS Keychain prompt that reading Chrome's can trigger) completely
     # out of the picture for ordinary failures like a 404 or a dropped network.
     if _looks_like_login_required(last_err):
-        for browser in _COOKIE_BROWSERS:
+        for browser in cookie_browsers():
             for extra_opts in attempts:
                 # Every format tier, not just the first: signing in only gets
                 # past the login wall, and the site may still have no stream
@@ -234,6 +249,12 @@ def download_video(
                     return
                 if isinstance(err, DownloadPaused):
                     raise err
+            # Cookie-store failures (Chrome's app-bound encryption, a missing
+            # Safari on Windows, a locked DB) must not replace the original
+            # YouTube/login error — that used to surface as "failed to load
+            # cookies from safari" on a machine that has never had Safari.
+            if _looks_like_cookie_store_failure(err):
+                continue
             # Keep the cookie attempt's own error. A browser that *is* signed
             # in gets past the login wall and then fails for some other reason
             # (no matching format, say); reporting the earlier login-required
@@ -279,6 +300,22 @@ class DRMProtected(Exception):
     """The only streams on offer are DRM-encrypted, so there is nothing to fetch."""
 
 
+_COOKIE_STORE_MARKERS = (
+    "failed to load cookies",
+    "failed to decrypt",
+    "could not copy",
+    "could not find",
+    "no such browser",
+    "unsupported cookie",
+    "could not find chrome cookies",
+)
+
+
+def _looks_like_cookie_store_failure(err: Optional[Exception]) -> bool:
+    text = str(err or "").lower()
+    return any(m in text for m in _COOKIE_STORE_MARKERS)
+
+
 def _looks_like_login_required(err: Optional[Exception]) -> bool:
     return any(m in str(err or "").lower() for m in _LOGIN_MARKERS)
 
@@ -299,6 +336,13 @@ def _friendly_error(err: Exception) -> Exception:
             "Watch it on the site instead."
         )
     if any(m in text.lower() for m in _LOGIN_MARKERS):
+        if sys.platform == "win32":
+            return LoginRequired(
+                "This video requires being signed in, or YouTube asked VDR to "
+                "confirm it isn't a bot. On Windows, Chrome's cookies usually "
+                "cannot be read (Chrome encrypts them for Chrome only). Sign "
+                "in to the site in Firefox, then try again."
+            )
         return LoginRequired(
             "This video requires being signed in. VDR already tried your "
             "Safari, Chrome and Firefox sessions without finding one that "

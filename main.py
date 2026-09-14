@@ -110,6 +110,17 @@ def report_crash(text: str) -> None:
 
 
 if __name__ == "__main__":
+    # Windows Setup runs `VDR.exe --install-browser-extension` (and the
+    # uninstaller the matching --uninstall flag). That must not open the Tk
+    # window or write crash.log — it is a silent registry/file copy.
+    if "--install-browser-extension" in sys.argv or "--uninstall-browser-extension" in sys.argv:
+        try:
+            from extension_install import install_from_cli
+            ok = install_from_cli(uninstall="--uninstall-browser-extension" in sys.argv)
+            sys.exit(0 if ok else 1)
+        except Exception:
+            traceback.print_exc()
+            sys.exit(1)
     try:
         main()
     except Exception:

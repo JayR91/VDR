@@ -1,7 +1,6 @@
 (function () {
   const BTN_CLASS = "vdr-overlay-btn";
   const IDLE_LABEL = "⬇ VDR";
-  const ATTACHED_ATTR = "data-vdr-attached";
 
   // Resolve the URL for the specific post a <video> belongs to, not just
   // "the current page" -- X/Twitter (and similar feeds) can show many
@@ -120,22 +119,33 @@
     return btn;
   }
 
+  function latchTarget(video) {
+    // YouTube: the inner .html5-video-container sits *under* .ytp-chrome-top,
+    // so a button parented there is in the DOM but invisible. Latch onto the
+    // player root (.html5-video-player) which owns both layers. Everywhere
+    // else, the <video>'s parent is the overlay host.
+    return video.closest(".html5-video-player") || video.parentElement;
+  }
+
+  function hasLatch(container) {
+    for (const child of container.children) {
+      if (child.classList && child.classList.contains(BTN_CLASS)) return true;
+    }
+    return false;
+  }
+
   function attach(video) {
-    if (video.hasAttribute(ATTACHED_ATTR)) return;
-    const container = video.parentElement;
+    const container = latchTarget(video);
     if (!container) return;
-    video.setAttribute(ATTACHED_ATTR, "1");
+    if (hasLatch(container)) return;
     if (getComputedStyle(container).position === "static") {
       container.style.position = "relative";
     }
     container.appendChild(makeButton(video));
-    // If the video is later removed from the page (e.g. scrolled out and
-    // recycled by X's virtualized timeline), the button goes with it since
-    // it lives inside the same subtree -- nothing to clean up by hand.
   }
 
   function scan() {
-    document.querySelectorAll(`video:not([${ATTACHED_ATTR}])`).forEach(attach);
+    document.querySelectorAll("video").forEach(attach);
   }
 
   // Debounce bursts of DOM mutations (X's feed churns heavily while
@@ -154,6 +164,8 @@
     childList: true,
     subtree: true,
   });
+
+  document.addEventListener("yt-navigate-finish", scheduleScan);
 
   scan();
   // Safety-net poll in case a site adds/replaces <video> elements without
