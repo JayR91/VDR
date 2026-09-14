@@ -3,7 +3,6 @@ import platform
 import queue
 import subprocess
 import threading
-import traceback
 import datetime as dt
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -11,6 +10,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 from queue_manager import QueueManager
 from engine import Status
 import video_capture
+import vdr_log
 from organizer import categorized_destination, organize_completed_file
 from desktop_integration import bind_macos_reopen, create_integration
 from focus_guard import FocusGuard, POLICY_HOLD
@@ -22,6 +22,12 @@ DEFAULT_DIR = os.path.expanduser("~/Downloads/VDR")
 # toolbar button, so App.__init__ raised TclError on Windows before the
 # window appeared. PyInstaller reports that as "Unhandled exception in script".
 _POINTER_CURSOR = "pointinghand" if platform.system() == "Darwin" else "hand2"
+
+# Focus Guard's status line talks about the machine the user is sitting at.
+# The wording was written for the Mac build and shipped verbatim on Windows,
+# where "whether you are using the Mac" is simply wrong about the device it is
+# running on.
+_DEVICE_NOUN = "Mac" if platform.system() == "Darwin" else "computer"
 
 
 def _open_path(path):
@@ -231,7 +237,7 @@ class App:
         ).pack(side="left")
         self.focus_status = ttk.Label(
             focus_frame,
-            text="Off — downloads ignore battery and whether you are using the Mac",
+            text=f"Off — downloads ignore battery and whether you are using the {_DEVICE_NOUN}",
         )
         self.focus_status.pack(side="left", padx=10)
         self.focus_guard = FocusGuard(self._apply_focus_policy, self._on_focus_change)
@@ -458,7 +464,12 @@ class App:
             except Exception as e:
                 if task.status != Status.CANCELLED:
                     task.status = Status.ERROR
-                    traceback.print_exc()
+                    # Was traceback.print_exc(). In the frozen windowed build
+                    # sys.stderr is None, so that call raised AttributeError
+                    # here inside the handler -- killing this thread before
+                    # the line below could put the reason on the event queue.
+                    # The row went red and the user was told nothing at all.
+                    vdr_log.get_logger().exception("video download failed: %s", url)
                     self._events.put(("error", f"Video download failed:\n{e}"))
 
         task.start_fn = lambda: threading.Thread(target=run, daemon=True).start()

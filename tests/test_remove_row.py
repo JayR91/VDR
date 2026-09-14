@@ -4,7 +4,10 @@ Drives the actual remove_selected() path against a real ttk.Treeview and the
 real event queue, so it exercises the resurrection bug end to end.
 """
 import os, sys, time
-sys.path.insert(0, os.path.expanduser("~/Downloads/VDR2"))
+# The repo root, the way the other tests find it. This used to point at a
+# hardcoded "~/Downloads/VDR2" from someone's machine, so the import failed
+# for everyone else and the test could never run.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import tkinter as tk
 from queue_manager import QueueManager
 from engine import Status

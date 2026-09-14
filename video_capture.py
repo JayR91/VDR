@@ -8,6 +8,7 @@ Note: only use this against content you have the right to download
 respect the terms of service of whatever site you're pulling from.
 """
 import os
+import shutil
 import sys
 from typing import Callable, Optional
 
@@ -15,27 +16,61 @@ import yt_dlp
 import yt_dlp.extractor as _ie_mod
 
 import page_media
+import vdr_log
 
 
 def _bundled_ffmpeg_dir():
-    """When frozen by PyInstaller, ffmpeg ships next to the executable so end
-    users need nothing preinstalled -- Homebrew on macOS (see
-    scripts/build_dmg.sh), a PATH entry on Windows (see
-    scripts/build_windows.ps1). Returns None when running from source,
-    falling back to PATH.
+    """Directory holding the frozen build's ffmpeg, or None when running from
+    source (in which case yt-dlp falls back to PATH).
 
     The binary is `ffmpeg` on macOS/Linux and `ffmpeg.exe` on Windows; probing
     for the bare name on Windows silently found nothing and left yt-dlp with
     no muxer, so merged video+audio downloads failed on exactly the machines
     least likely to have ffmpeg installed already.
+
+    Where it lands differs by platform *and* by PyInstaller layout, so all the
+    plausible spots get checked rather than just one:
+
+      - `sys._MEIPASS` is the authoritative answer in a frozen build. For
+        onedir it is the contents directory, for onefile the unpack temp dir.
+      - Next to the executable is where the macOS .app puts it (Contents/MacOS)
+        and where a hand-assembled build tree would.
+      - `_internal/` beside the executable is PyInstaller 6's onedir contents
+        directory. This is the one that actually bit us: VDR-windows.spec adds
+        ffmpeg with dest ".", which PyInstaller 6 resolves *into* the contents
+        directory, so the installed layout is `VDR/_internal/ffmpeg.exe` while
+        this function only ever looked in `VDR/`. It found nothing, yt-dlp got
+        no muxer, and every video needing a video+audio merge -- i.e. most
+        YouTube above 360p -- died partway with "you have requested merging of
+        multiple formats but ffmpeg is not installed", leaving a .part file.
     """
     if not getattr(sys, "frozen", False):
         return None
     exe_dir = os.path.dirname(sys.executable)
-    for name in ("ffmpeg.exe", "ffmpeg"):
-        if os.path.exists(os.path.join(exe_dir, name)):
-            return exe_dir
+    candidates = [
+        getattr(sys, "_MEIPASS", None),
+        exe_dir,
+        os.path.join(exe_dir, "_internal"),
+    ]
+    for directory in candidates:
+        if not directory or not os.path.isdir(directory):
+            continue
+        for name in ("ffmpeg.exe", "ffmpeg"):
+            if os.path.exists(os.path.join(directory, name)):
+                return directory
     return None
+
+
+def _ffmpeg_available() -> bool:
+    """Whether a muxer exists at all -- bundled, or already on the user's PATH.
+
+    Drives the progressive-stream fallback in download_video(): without ffmpeg
+    a merged format selector cannot produce a file, and yt-dlp aborts rather
+    than quietly picking something else.
+    """
+    if _bundled_ffmpeg_dir():
+        return True
+    return shutil.which("ffmpeg") is not None
 
 _extractor_classes = None
 
@@ -162,6 +197,24 @@ def download_video(
         "noplaylist": False,
         "quiet": True,
         "no_warnings": True,
+        # yt-dlp's defaults give up on a stalled read quickly, which on a
+        # home connection shows up as a download that stops partway and is
+        # reported as an error with a .part file left behind. Retrying the
+        # whole download, retrying individual fragments, and allowing a
+        # longer read before declaring the socket dead are what turn a brief
+        # network hiccup back into a download that finishes.
+        "retries": 10,
+        "fragment_retries": 10,
+        "socket_timeout": 30,
+        # Pick up where a previous attempt left off instead of restarting.
+        "continuedl": True,
+        # A frozen GUI build has no console: yt-dlp's progress writer would be
+        # writing to a stdout that does not exist. Progress reaches the UI
+        # through progress_hooks regardless.
+        "noprogress": True,
+        # Without this yt-dlp's warnings and errors are simply discarded, so a
+        # download that fails leaves nothing to explain why.
+        "logger": vdr_log.YtdlpLogger(vdr_log.get_logger()),
     }
 
     if audio_only:
@@ -203,23 +256,63 @@ def download_video(
             {"format": f"bestvideo[height<={MAX_HEIGHT}]+bestaudio/best[height<={MAX_HEIGHT}]/best",
              "postprocessors": []},
         ]
+        # Every tier above leads with a `video+audio` selector, which yt-dlp
+        # can only satisfy by muxing. With no ffmpeg anywhere it does not fall
+        # through to the progressive alternative after the "/" -- the merged
+        # selector *matched*, so it commits to it and then aborts with
+        # "you have requested merging of multiple formats but ffmpeg is not
+        # installed". A progressive-only tier last means the worst case is a
+        # complete file at whatever single-stream quality the site offers,
+        # instead of no file and an error.
+        if not _ffmpeg_available():
+            attempts.append({"format": f"b[ext=mp4][height<={MAX_HEIGHT}]/b[ext=mp4]/b",
+                             "postprocessors": []})
+
+    # Snapshotted once, before any attempt, so give_up() can tell what this
+    # call created from what was already sitting in the folder.
+    before_any = set(os.listdir(dest_dir))
 
     def _try(extra_opts) -> Optional[Exception]:
         """Run one attempt. Returns None on success, or the exception raised."""
-        before = set(os.listdir(dest_dir))
         try:
             with yt_dlp.YoutubeDL({**base_opts, **extra_opts}) as ydl:
                 ydl.download([url])
             return None
         except Exception as e:
-            # A failed attempt shouldn't leave partial fragments behind for
-            # the next attempt (or the user) to trip over.
-            for name in set(os.listdir(dest_dir)) - before:
-                try:
-                    os.remove(os.path.join(dest_dir, name))
-                except OSError:
-                    pass
+            # Deliberately leaves partial fragments in place for the next
+            # attempt. This used to delete everything the attempt produced,
+            # which was actively harmful: a merged download fetches video and
+            # audio as separate streams, so a hiccup on the audio stream --
+            # a 403 on its URL, a dropped connection -- threw away a video
+            # stream that had already finished downloading. The next attempt
+            # then re-fetched hundreds of MB it already had, took long enough
+            # to invite the same failure again, and the user watched three
+            # full downloads end in an error and no file.
+            #
+            # Fragments are named per format ("...f299.mp4", "...f140.m4a"),
+            # so a different format tier cannot collide with a previous one's
+            # leftovers, and `continuedl` means an identical tier resumes from
+            # them instead of restarting. Cleanup happens once, in give_up().
+            vdr_log.get_logger().warning(
+                "attempt failed (format=%r): %s: %s",
+                extra_opts.get("format"), type(e).__name__, e,
+            )
             return e
+
+    def give_up(err: Exception):
+        """Remove what this call produced, then raise a presentable error.
+
+        Only reached once every attempt has failed, so there is nothing left
+        worth resuming -- and leaving a half-downloaded stream behind would
+        show up in the user's folder as a file that looks real but is not.
+        """
+        vdr_log.get_logger().error("giving up on %s: %s: %s", url, type(err).__name__, err)
+        for name in set(os.listdir(dest_dir)) - before_any:
+            try:
+                os.remove(os.path.join(dest_dir, name))
+            except OSError:
+                pass
+        raise _friendly_error(err)
 
     last_err = None
     for extra_opts in attempts:
@@ -279,7 +372,7 @@ def download_video(
                 _resolved=True,
             )
 
-    raise _friendly_error(last_err)
+    give_up(last_err)
 
 
 _LOGIN_MARKERS = (

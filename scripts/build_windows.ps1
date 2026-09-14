@@ -110,13 +110,32 @@ VSVersionInfo(
     if (-not (Test-Path $exe)) { throw "expected $exe was not produced" }
     Write-Host "    built $exe"
 
+    # The frozen app must be able to find its own muxer. VDR-windows.spec adds
+    # ffmpeg with dest ".", which PyInstaller 6 places in the contents
+    # directory rather than beside the exe -- assert on the layout that
+    # actually ships, so a future PyInstaller change that moves it is caught
+    # here instead of by a user whose download stops partway.
+    if (-not $SkipFfmpeg) {
+        $ffmpegPaths = @("dist\VDR\ffmpeg.exe", "dist\VDR\_internal\ffmpeg.exe")
+        $found = $ffmpegPaths | Where-Object { Test-Path $_ }
+        if (-not $found) {
+            throw "ffmpeg was staged but is not in the frozen tree (looked in: $($ffmpegPaths -join ', '))"
+        }
+        Write-Host "    bundled ffmpeg at $found"
+    }
+
     # --- 4. installer ------------------------------------------------------
     Write-Host "==> Compiling installer"
     $iscc = Get-Command "iscc.exe" -ErrorAction SilentlyContinue
     if (-not $iscc) {
         foreach ($candidate in @(
             "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            # `winget install JRSoftware.InnoSetup` without admin rights
+            # installs per-user here -- which is what the error message below
+            # tells you to run, so not looking for the result of it made the
+            # advice a dead end.
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
         )) {
             if (Test-Path $candidate) { $iscc = $candidate; break }
         }

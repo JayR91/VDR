@@ -30,6 +30,14 @@ POLICY_FULL = "full"
 POLICY_CRAWL = "active"
 POLICY_HOLD = "battery"
 
+# These strings are shown to the user, and the Mac build's wording shipped
+# unchanged on Windows -- a Windows user was told their "Mac" was on battery.
+# Windows' own name for the power-saving mode is Battery Saver, not macOS's
+# Low Power Mode (see _read_power_windows, which reads exactly that flag).
+_IS_MAC = platform.system() == "Darwin"
+_DEVICE_NOUN = "Mac" if _IS_MAC else "computer"
+_LOW_POWER_NAME = "Low Power Mode" if _IS_MAC else "Battery Saver"
+
 
 def decide_policy(enabled: bool, on_battery: bool, low_power: bool, idle_seconds: float) -> str:
     if not enabled:
@@ -187,12 +195,12 @@ class FocusGuard:
         if policy == POLICY_OFF:
             detail = "Off — downloads run at your speed limit"
         elif policy == POLICY_HOLD:
-            reason = "Low Power Mode" if low_power and not on_battery else "battery"
-            detail = f"Paused — Mac is on {reason}"
+            reason = _LOW_POWER_NAME if low_power and not on_battery else "battery"
+            detail = f"Paused — {_DEVICE_NOUN} is on {reason}"
         elif policy == POLICY_CRAWL:
-            detail = "Crawling at 256 KB/s while you use the Mac"
+            detail = f"Crawling at 256 KB/s while you use the {_DEVICE_NOUN}"
         else:
-            detail = "Full speed — Mac is idle and plugged in"
+            detail = f"Full speed — {_DEVICE_NOUN} is idle and plugged in"
 
         changed = policy != self.policy
         self.policy = policy

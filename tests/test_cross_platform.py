@@ -197,6 +197,63 @@ finally:
     else:
         os.environ["LOCALAPPDATA"] = saved_localappdata
 
+
+# --- 7. the frozen build can find its own ffmpeg ----------------------------
+# The regression this pins: VDR-windows.spec adds ffmpeg with dest ".", and
+# PyInstaller 6 resolves that into the onedir *contents* directory, so the
+# shipped layout is VDR\_internal\ffmpeg.exe. _bundled_ffmpeg_dir() only ever
+# looked beside the executable, found nothing, and left yt-dlp with no muxer --
+# so every download needing a video+audio merge (most of YouTube above 360p)
+# stopped partway and left a .part file behind.
+import tempfile
+
+import video_capture
+
+saved_frozen = getattr(sys, "frozen", None)
+saved_meipass = getattr(sys, "_MEIPASS", None)
+saved_executable = sys.executable
+try:
+    for layout, subdir in [("beside the exe", ""), ("in _internal", "_internal")]:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+            target_dir = os.path.join(tmp, subdir) if subdir else tmp
+            os.makedirs(target_dir, exist_ok=True)
+            open(os.path.join(target_dir, binary), "wb").close()
+
+            sys.frozen = True
+            sys.executable = os.path.join(tmp, "VDR.exe")
+            # PyInstaller always sets _MEIPASS in a frozen build; point it at
+            # the contents directory the way onedir actually does.
+            sys._MEIPASS = os.path.join(tmp, "_internal")
+
+            found = video_capture._bundled_ffmpeg_dir()
+            check(
+                f"frozen build finds ffmpeg {layout}",
+                found is not None and os.path.samefile(found, target_dir),
+            )
+
+    # Running from source must still defer to PATH rather than inventing a dir.
+    if saved_frozen is None:
+        del sys.frozen
+    else:
+        sys.frozen = saved_frozen
+    check(
+        "unfrozen build defers to PATH",
+        video_capture._bundled_ffmpeg_dir() is None,
+    )
+finally:
+    if saved_frozen is None:
+        if hasattr(sys, "frozen"):
+            del sys.frozen
+    else:
+        sys.frozen = saved_frozen
+    if saved_meipass is None:
+        if hasattr(sys, "_MEIPASS"):
+            del sys._MEIPASS
+    else:
+        sys._MEIPASS = saved_meipass
+    sys.executable = saved_executable
+
 print()
 if failures:
     print(f"FAIL - {len(failures)} check(s) failed:")
