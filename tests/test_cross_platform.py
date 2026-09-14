@@ -133,6 +133,42 @@ check("active user -> crawl", focus_guard.decide_policy(True, False, False, 1) =
 check("idle + mains -> full", focus_guard.decide_policy(True, False, False, 999) == focus_guard.POLICY_FULL)
 check("disabled -> off", focus_guard.decide_policy(False, True, True, 0) == focus_guard.POLICY_OFF)
 
+# --- 6. Dock-reopen Tcl command is macOS-only -------------------------------
+# gui.py used to call root.createcommand("::tk::mac::ReopenApplication") on
+# every platform. Windows Tk has no ::tk::mac namespace, so that raised and
+# App.__init__ died: Setup.exe finished, then VDR.exe never showed a window.
+
+
+class _BoomRoot:
+    def createcommand(self, *args, **kwargs):
+        raise AssertionError("createcommand must not run off Darwin")
+
+
+check(
+    "bind_macos_reopen skips Windows",
+    desktop_integration.bind_macos_reopen(_BoomRoot(), lambda: None, system="Windows") is False,
+)
+check(
+    "bind_macos_reopen skips Linux",
+    desktop_integration.bind_macos_reopen(_BoomRoot(), lambda: None, system="Linux") is False,
+)
+
+
+class _OkRoot:
+    def __init__(self):
+        self.name = None
+
+    def createcommand(self, name, callback):
+        self.name = name
+
+
+ok_root = _OkRoot()
+check(
+    "bind_macos_reopen registers on Darwin",
+    desktop_integration.bind_macos_reopen(ok_root, lambda: None, system="Darwin") is True
+    and ok_root.name == "::tk::mac::ReopenApplication",
+)
+
 print()
 if failures:
     print(f"FAIL - {len(failures)} check(s) failed:")
