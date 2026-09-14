@@ -17,6 +17,12 @@ from focus_guard import FocusGuard, POLICY_HOLD
 
 DEFAULT_DIR = os.path.expanduser("~/Downloads/VDR")
 
+# macOS Tk names the finger cursor "pointinghand". Windows and X11 Tk do not
+# know that name — they use "hand2". v2.2.1 passed pointinghand into every
+# toolbar button, so App.__init__ raised TclError on Windows before the
+# window appeared. PyInstaller reports that as "Unhandled exception in script".
+_POINTER_CURSOR = "pointinghand" if platform.system() == "Darwin" else "hand2"
+
 
 def _open_path(path):
     # subprocess.Popen launches and returns immediately; os.system() would
@@ -182,7 +188,7 @@ class App:
         self._apply_system_theme()
 
         def add_button(parent, text, command, **pack_opts):
-            b = ttk.Button(parent, text=text, command=command, cursor="pointinghand")
+            b = ttk.Button(parent, text=text, command=command, cursor=_POINTER_CURSOR)
             b.pack(side="left", **pack_opts)
             return b
 
