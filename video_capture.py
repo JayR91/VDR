@@ -194,7 +194,17 @@ def download_video(
         # additionally fire with the real final filepath once merging/conversion
         # finishes -- callers need that to know what file actually exists at the end.
         "postprocessor_hooks": [progress_hook] if progress_hook else [],
-        "noplaylist": False,
+        # "Download only the video, if the URL refers to a video AND a
+        # playlist." This was False, which is how clicking the ⬇ VDR button on
+        # a video downloaded a different one: YouTube puts almost every music
+        # video inside an auto-generated Mix, so the page URL the extension
+        # reads carries &list=RD..., and yt-dlp obligingly queued the whole
+        # 484-entry mix and started at its first track. The clicked video was
+        # never what arrived.
+        #
+        # True does not cost playlist support: a /playlist?list=... URL has no
+        # single video to prefer, so it still resolves to all its entries.
+        "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
         # yt-dlp's defaults give up on a stalled read quickly, which on a
