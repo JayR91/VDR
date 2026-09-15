@@ -577,9 +577,36 @@ class App:
             task.dest_path = organize_completed_file(task.dest_path, DEFAULT_DIR)
         except Exception:
             pass
+        self._set_final_size(task)
         name = os.path.basename(task.dest_path)
         self.mac.play_completion_sound()
         self.mac.notify_completion("Download complete", name)
+
+    @staticmethod
+    def _set_final_size(task):
+        """Report the finished file's real size once it exists on disk.
+
+        Until now the Size column kept whatever the progress hook last saw,
+        which for a merged video+audio download is the *audio* stream -- the
+        second and much smaller of the two -- and for anything that finished
+        without a size ever being reported was nothing at all, so a completed
+        row could sit there claiming 0.0B. Neither number describes the file
+        the user now has.
+
+        yt-dlp's hook cannot answer this: it reports per-stream totals while
+        downloading, and the file it names is a temporary fragment that gets
+        deleted at merge time. The finished file is the only honest source,
+        and by here it exists and has its final name.
+        """
+        try:
+            size = os.path.getsize(task.dest_path)
+        except OSError:
+            return  # moved or removed already; leave the row as it is
+        task.total_size = size
+        # Keeps Progress at a true 100% rather than a percentage computed
+        # against a stream total that no longer means anything.
+        if hasattr(task, "_downloaded"):
+            task._downloaded = size
 
     def _on_close_window(self):
         """Hide rather than quit -- but only while something can bring it back.
