@@ -16,6 +16,21 @@ On Windows this module:
      same installer as chrome://extensions → Load unpacked). Consumer Chrome
      refuses local CRX force-install unless the machine is AD/AAD enrolled,
      so CDP is what actually enables the latch on a home PC.
+
+     KNOWN LIMITATION, Chrome/Edge >= 136: they refuse to open a remote
+     debugging port when running on the *default* user data directory
+     (crbug.com/1478897 hardening). --remote-debugging-port is accepted and
+     then silently never listens, so _wait_cdp times out and step 3 cannot
+     reach the profile the user actually browses in. Verified against Chrome
+     145. Passing --user-data-dir elsewhere lifts the restriction but then
+     loads the extension into a throwaway profile, which is useless here.
+
+     So on current Chrome the latch has to be installed by hand, once:
+     chrome://extensions -> Developer mode -> Load unpacked -> the directory
+     from step 1. That install is persistent and survives upgrades, since
+     step 1's path is stable. Automating it again needs either a Chrome Web
+     Store listing (update_url the registry key in step 2 would honour) or
+     an ExtensionSettings enterprise policy pointing at a self-hosted CRX.
   4. Writes a Firefox HKCU policy + XPI for ESR/Developer, where policy
      install is allowed without the Chrome Web Store.
 
@@ -649,7 +664,23 @@ def ensure_installed(
         mark_registered(chrome_dir, f"cdp:{image}")
         result["cdp"] = image
         _clear_runonce()
-    except Exception:
+    except Exception as exc:
+        # Record why. This used to swallow the exception entirely, so an
+        # install that achieved nothing still reported success and the user
+        # was left looking for a button that had never been installed --
+        # with nothing written anywhere to say so.
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        result["ok"] = False
+        try:
+            import vdr_log
+
+            vdr_log.get_logger().error(
+                "browser extension not loaded: %s. Load it by hand: "
+                "chrome://extensions -> Developer mode -> Load unpacked -> %s",
+                result["error"], chrome_dir,
+            )
+        except Exception:
+            pass
         result["needs_browser_restart"] = not is_marked_registered(chrome_dir)
         if result["needs_browser_restart"]:
             _write_runonce()
