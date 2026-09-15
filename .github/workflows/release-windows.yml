@@ -1,0 +1,89 @@
+name: Build and release (Windows only)
+
+# Deliberately separate from release.yml rather than a flag inside it.
+#
+# release.yml is the both-platforms pipeline: it builds the DMG and the
+# installer, and its release job `needs` them both, so a `v*` tag necessarily
+# rebuilds and republishes macOS. That is the right default for a normal
+# release and the wrong thing when the only change is a Windows fix -- it
+# reissues a macOS artifact nobody asked for, from whatever the Mac toolchain
+# happens to produce that day.
+#
+# This one ships Windows alone. Tag `win-v<version>` instead of `v<version>`;
+# that pattern cannot match release.yml's `v*`, so exactly one pipeline runs
+# and the macOS build is never started.
+on:
+  push:
+    tags:
+      - "win-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify platform dispatch
+        timeout-minutes: 5
+        run: python tests/test_cross_platform.py
+
+      - name: Build EXE and installer
+        shell: pwsh
+        run: |
+          # Strip the win- prefix: the installer filename and the .exe version
+          # resource want a plain version, not the tag's routing prefix.
+          $version = if ($env:GITHUB_REF_NAME -match '^win-(v.+)$') { $Matches[1] } else { "0.0.0" }
+          ./scripts/build_windows.ps1 -Version $version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist_installer/*.exe
+          if-no-files-found: error
+
+  release:
+    needs: [build-windows]
+    runs-on: ubuntu-latest
+    # workflow_dispatch runs exist to prove the build; only a tag publishes.
+    if: startsWith(github.ref, 'refs/tags/win-v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: artifacts
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#win-}"
+
+          # Upload into the version's existing release when there is one, so a
+          # Windows-only fix can be added to a release that already carries a
+          # macOS asset without disturbing it. --clobber replaces only the
+          # files named here.
+          if gh release view "$version" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $version exists; adding/replacing the Windows asset only"
+            gh release upload "$version" artifacts/*.exe \
+              --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$version" artifacts/*.exe \
+              --repo "${{ github.repository }}" \
+              --title "VDR $version" \
+              --generate-notes
+          fi
