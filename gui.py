@@ -679,28 +679,36 @@ class App:
         self.qm.set_speed_limit(kb * 1024 if kb else None)
 
     def _ensure_windows_extension(self):
-        """Refresh the ⬇ VDR latch files/registry; load into Chrome if it is closed.
+        """Refresh the ⬇ VDR latch files and registry on launch.
 
-        Setup already ran this. Doing it again on launch picks up upgrades and
-        finishes registration if Chrome was busy during Setup. Never force-kills
-        a running browser from the GUI — that would drop the user's tabs.
+        Setup already ran this. Doing it again picks up upgrades, so the
+        extension folder Chrome has loaded stays current. The copy is in
+        place, never a delete-and-recreate, so a browser holding that folder
+        open does not lose the extension mid-session.
+
+        It deliberately never starts a browser. It used to pass
+        launch_if_needed=True whenever Chrome happened to be closed, so VDR
+        would open a Chrome of its own on about:blank to drive DevTools. Two
+        things were wrong with that. The window is a surprise -- VDR is a
+        download manager and the user did not ask it to open a browser. And
+        because that launch names no --profile-directory, Chrome opens the
+        *default* profile, while the extension is loaded in whichever profile
+        the user actually browses in; the window that appears is therefore the
+        one place the button is guaranteed to be missing, which reads as "the
+        extension is gone" when it is loaded and enabled all along.
+
+        It buys nothing either way: Chrome and Edge >= 136 refuse to open a
+        debugging port on the default user data directory, so the DevTools
+        install cannot reach a real profile regardless (see extension_install).
         """
         def work():
             try:
                 import extension_install
-                chrome_running = extension_install._process_running("chrome.exe")
-                result = extension_install.ensure_installed(
-                    try_cdp=True,
+                extension_install.ensure_installed(
+                    try_cdp=False,
                     close_browser_if_needed=False,
-                    launch_if_needed=not chrome_running,
+                    launch_if_needed=False,
                 )
-                if result.get("needs_browser_restart"):
-                    self._events.put((
-                        "info",
-                        "Restart Chrome once to show the ⬇ VDR button on videos. "
-                        "VDR already registered the extension; Chrome has to be "
-                        "fully quit (not just the window) to pick it up.",
-                    ))
             except Exception:
                 pass
         threading.Thread(target=work, daemon=True).start()

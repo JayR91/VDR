@@ -149,7 +149,11 @@ VSVersionInfo(
     & $iscc "/DVDRVersion=$($Version -replace '^v', '')" "installer.iss"
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
 
-    $setup = Get-ChildItem "dist_installer\*.exe" | Select-Object -First 1
+    # Newest, not first-alphabetically. dist_installer accumulates every
+    # version ever built, so the old code reported "VDR-2.2.4-..." at the end
+    # of a run that had just produced 2.2.7 -- and the path it printed is the
+    # one you reach for to install what you built.
+    $setup = Get-ChildItem "dist_installer\*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     Write-Host ""
     Write-Host "==> Done: $($setup.FullName)" -ForegroundColor Green
     Write-Host "    $([math]::Round($setup.Length / 1MB, 1)) MB"

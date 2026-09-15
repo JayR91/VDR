@@ -545,6 +545,51 @@ def _wait_cdp(port: int, timeout_s: float = 12.0) -> str:
     raise OSError(f"Chrome DevTools never came up on port {port}: {last}")
 
 
+#: First Chromium major version that refuses --remote-debugging-port while
+#: running on the default user data directory. At or above this, the DevTools
+#: install cannot reach the profile the user actually browses in, so there is
+#: nothing to gain by closing or launching their browser to try.
+_CDP_BLOCKED_FROM_MAJOR = 136
+
+
+def cdp_possible() -> bool:
+    """Whether any installed Chromium could still accept a DevTools install.
+
+    False once every browser on the machine is >= _CDP_BLOCKED_FROM_MAJOR.
+    Retrying then is not "try again later", it is "try again never", so the
+    sign-in retry must not be queued -- it would re-arm itself on every run
+    and never once succeed.
+    """
+    for _image, candidates in _CHROMIUM_EXES:
+        exe = _first_existing(candidates)
+        if exe is None:
+            continue
+        major = _browser_major_version(exe)
+        if major is None or major < _CDP_BLOCKED_FROM_MAJOR:
+            return True
+    return False
+
+
+def _browser_major_version(exe: Path) -> Optional[int]:
+    """Major version of a Chromium browser, or None if it cannot be read.
+
+    Chrome, Edge and Brave all keep their payload in a versioned directory
+    beside the executable ("145.0.7632.76"), which is readable without any
+    Windows version-resource API.
+    """
+    try:
+        majors = []
+        for child in exe.parent.iterdir():
+            if not child.is_dir():
+                continue
+            head = child.name.split(".", 1)[0]
+            if head.isdigit() and "." in child.name:
+                majors.append(int(head))
+        return max(majors) if majors else None
+    except OSError:
+        return None
+
+
 def load_unpacked_via_cdp(
     unpacked_dir: Path,
     *,
@@ -566,6 +611,21 @@ def load_unpacked_via_cdp(
     chrome_first = [pair for pair in installed if pair[0] == "chrome.exe"]
     targets = chrome_first or installed
     for image, exe in targets:
+        major = _browser_major_version(exe)
+        if major is not None and major >= _CDP_BLOCKED_FROM_MAJOR:
+            # Skip before touching the browser at all. Closing the user's
+            # windows, or opening one of our own, to drive an API this build
+            # will not serve is pure cost -- and the browser we would launch
+            # names no --profile-directory, so it opens the default profile
+            # rather than the one holding the extension.
+            last_err = OSError(
+                f"{image} is version {major}; Chromium >= "
+                f"{_CDP_BLOCKED_FROM_MAJOR} refuses a debugging port on the "
+                f"default profile, so the extension must be loaded by hand "
+                f"(chrome://extensions -> Developer mode -> Load unpacked -> "
+                f"{unpacked_dir})"
+            )
+            continue
         running = _process_running(image)
         if running and close_browser_if_needed:
             _graceful_close(image)
@@ -681,9 +741,15 @@ def ensure_installed(
             )
         except Exception:
             pass
-        result["needs_browser_restart"] = not is_marked_registered(chrome_dir)
+        # Only worth retrying at next sign-in if a DevTools install could ever
+        # work here. Where every browser is too new for it, queueing the retry
+        # just re-arms itself on each run for a step that cannot succeed.
+        retryable = cdp_possible()
+        result["needs_browser_restart"] = retryable and not is_marked_registered(chrome_dir)
         if result["needs_browser_restart"]:
             _write_runonce()
+        else:
+            _clear_runonce()
     return result
 
 
