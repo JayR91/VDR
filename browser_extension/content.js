@@ -14,10 +14,17 @@
     // as 20+ DOM levels below its <article> wrapper.
     const article = video.closest("article");
     if (article) {
+      // The permalink is the anchor wrapping the tweet's timestamp. Taking
+      // the *first* /status/ link in the article instead picked up whatever
+      // came earlier in the DOM -- a "replying to" or quoted-post link in a
+      // thread -- and VDR downloaded that post's video, not the one under
+      // the button the user clicked.
+      const stamp = article.querySelector('a[href*="/status/"] time');
       const link =
-        article.querySelector('a[href*="/status/"]') ||
-        article.querySelector("a[href] time")?.closest("a");
-      if (link && link.href) return link.href;
+        (stamp && stamp.closest("a")) ||
+        article.querySelector("a[href] time")?.closest("a") ||
+        article.querySelector('a[href*="/status/"]');
+      if (link && link.href) return link.href.split("?")[0];
     }
     return location.href;
   }

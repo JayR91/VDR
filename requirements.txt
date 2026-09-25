@@ -6,6 +6,10 @@ yt-dlp>=2026.8.19
 pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'
 py2app>=0.28; sys_platform == 'darwin'
 dmgbuild>=1.6; sys_platform == 'darwin'
+# Build-time only: a static ffmpeg (Apple Silicon + Intel) for the .app.
+# scripts/build_dmg.sh copies it in; Homebrew's ffmpeg is a dynamically
+# linked stub that only works on the machine it was installed on.
+imageio-ffmpeg>=0.5; sys_platform == 'darwin'
 
 # Windows-only: notification-area (tray) icon and its glyph. Both are
 # optional at runtime -- desktop_integration falls back to a no-op when they

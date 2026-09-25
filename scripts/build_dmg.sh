@@ -40,17 +40,56 @@ if [ ! -d "dist/$APP_NAME.app" ]; then
   exit 1
 fi
 
-# Bundle ffmpeg (from this build machine's own install -- not downloaded
-# from the internet here) so video downloads that need to merge separate
-# video/audio streams work out of the box, without end users needing
-# Homebrew or ffmpeg installed themselves. video_capture.py looks for it
-# next to the frozen executable via yt-dlp's ffmpeg_location option.
-FFMPEG_BIN="$(command -v ffmpeg || true)"
+# Bundle ffmpeg so video downloads that need to merge separate video/audio
+# streams work out of the box, without end users needing Homebrew or ffmpeg
+# installed themselves. video_capture.py looks for it next to the frozen
+# executable via yt-dlp's ffmpeg_location option.
+#
+# It has to be a *self-contained* binary. This used to copy `command -v
+# ffmpeg`, which on any Mac with Homebrew is a 400 KB stub dynamically
+# linked against /opt/homebrew/Cellar/ffmpeg/<ver>/lib/*.dylib -- it ran on
+# the build machine and on no one else's, so every shipped DMG's merges
+# failed exactly for the users the bundling was meant to help. The
+# imageio-ffmpeg wheel (requirements.txt) carries a static, GPL ffmpeg for
+# both Apple Silicon and Intel; that is the preferred source. Whatever is
+# chosen is checked with otool, and a dynamically linked binary fails the
+# build rather than shipping.
+pick_ffmpeg() {
+  local candidate
+  candidate="$(python3 -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())' 2>/dev/null || true)"
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    echo "$candidate"
+    return
+  fi
+  if [ -n "${VDR_FFMPEG:-}" ] && [ -x "${VDR_FFMPEG}" ]; then
+    echo "${VDR_FFMPEG}"
+    return
+  fi
+  command -v ffmpeg || true
+}
+
+is_self_contained() {
+  # Anything outside /usr/lib and /System is a library the user's Mac
+  # cannot be assumed to have.
+  ! otool -L "$1" | tail -n +2 | awk '{print $1}' | grep -Eq '^/(opt/homebrew|usr/local|Users|private)'
+}
+
+FFMPEG_BIN="$(pick_ffmpeg)"
 if [ -n "$FFMPEG_BIN" ]; then
-  echo "==> Bundling ffmpeg from $FFMPEG_BIN"
-  cp "$FFMPEG_BIN" "dist/$APP_NAME.app/Contents/MacOS/ffmpeg"
+  if is_self_contained "$FFMPEG_BIN"; then
+    echo "==> Bundling ffmpeg from $FFMPEG_BIN"
+    cp "$FFMPEG_BIN" "dist/$APP_NAME.app/Contents/MacOS/ffmpeg"
+    chmod 755 "dist/$APP_NAME.app/Contents/MacOS/ffmpeg"
+  else
+    echo "ERROR: $FFMPEG_BIN is dynamically linked against libraries only this" >&2
+    echo "       machine has (see 'otool -L'). Shipping it would break video merging" >&2
+    echo "       for every user without the same Homebrew install." >&2
+    echo "       Fix: pip install imageio-ffmpeg   (static build, picked up automatically)" >&2
+    echo "       or point VDR_FFMPEG at a static ffmpeg binary." >&2
+    exit 1
+  fi
 else
-  echo "==> WARNING: ffmpeg not found on this machine (brew install ffmpeg)." >&2
+  echo "==> WARNING: no ffmpeg found (pip install imageio-ffmpeg)." >&2
   echo "    Building without it -- video merging will fail for anyone" >&2
   echo "    who installs this app unless they separately install ffmpeg." >&2
 fi

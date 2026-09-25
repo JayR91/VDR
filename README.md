@@ -113,7 +113,18 @@ localhost — nothing external can reach it).
   in the background and saves into `~/Downloads/VDR`. It does **not** put a
   button on the website's player — that **⬇ VDR** latch is the browser
   extension (Windows Setup registers it; see below).
-- Select a row to **Pause / Resume / Cancel / Remove / Open Folder**.
+  - A URL that points at a playlist asks before queuing the whole thing; the default
+    is the single video you were looking at.
+  - Live or upcoming broadcasts are refused with a clear message instead of being
+    recorded forever — there is no "end" for a download to reach.
+  - A size shown as `~280MB` is yt-dlp's running estimate for a streamed (HLS/DASH)
+    file; the tilde disappears once the real size is known. Progress and the
+    percentage are cumulative across the separate video and audio streams, so they
+    never reset partway through.
+- Select a row to **Pause / Resume / Cancel / Remove / Open Folder**. Pause keeps the
+  partial download so Resume continues it; Cancel deletes the partial files. Resume on
+  an errored video retries it.
+- At most two videos download at once; the rest wait in the queue.
 - Set a global **speed limit** in KB/s (0 = unlimited) and click Apply.
 - Turn on **Focus Guard** to pause on battery and slow down while you are at the keyboard.
 - **Schedule URL** opens a future-time queue timer. Use a blank time for midnight.
@@ -137,6 +148,13 @@ The resulting `dist/VDR.app` supports Dock URL delivery via macOS argv emulation
 links can be dropped onto its Dock icon after the bundle is launched. The menu-bar drop
 target works while running from source as well. `setup.py` remains available for py2app
 builds if you prefer that packaging flow.
+
+For a distributable DMG use `bash scripts/build_dmg.sh` instead. It bundles ffmpeg
+inside the app and insists on a self-contained (statically linked) binary: a Homebrew
+`ffmpeg` is a stub that dylinks into `/opt/homebrew/Cellar`, so an app built with it
+fails to merge video and audio on any Mac without the same Homebrew install. The script
+uses the static build shipped by `imageio-ffmpeg` (in `requirements.txt`) when it is
+installed; set `VDR_FFMPEG=/path/to/static/ffmpeg` to supply your own.
 
 ### Building the Windows app
 

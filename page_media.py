@@ -57,6 +57,33 @@ ASSUMED_HEIGHT = 1080
 
 _NOISE = ("thumb", "poster", "preview", "sprite", "trailer")
 
+# Where a page *declares* its main video, as opposed to any media URL that
+# happens to be in the markup. A page with a promo clip in the header, a
+# related-videos rail and the actual lesson in the player has many media
+# URLs; the regex sweep alone ranked them by resolution and handed over the
+# sharpest promo. These are the places the page itself points at the video
+# it is about, and they win over the sweep regardless of resolution.
+_DECLARED = (
+    # <meta property="og:video" content="..."> and the :url / :secure_url forms
+    re.compile(
+        r"<meta\s+[^>]*?(?:property|name)\s*=\s*[\"'](?:og:video(?::url|:secure_url)?|twitter:player:stream)[\"'][^>]*?content\s*=\s*[\"']([^\"']+)[\"']",
+        re.IGNORECASE,
+    ),
+    # Same tag, attributes in the other order
+    re.compile(
+        r"<meta\s+[^>]*?content\s*=\s*[\"']([^\"']+)[\"'][^>]*?(?:property|name)\s*=\s*[\"'](?:og:video(?::url|:secure_url)?|twitter:player:stream)[\"']",
+        re.IGNORECASE,
+    ),
+    # schema.org VideoObject in JSON-LD
+    re.compile(r"[\"']contentUrl[\"']\s*:\s*[\"']([^\"']+)[\"']", re.IGNORECASE),
+    # The player element itself
+    re.compile(r"<(?:video|source)\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE),
+)
+
+# Provenance ranks, lowest wins. See _rank().
+_FROM_DECLARATION = 0
+_FROM_SWEEP = 1
+
 
 def _filename(url: str) -> str:
     path = urllib.parse.urlsplit(url).path
@@ -91,10 +118,15 @@ def is_manifest(url: str) -> bool:
     return name.endswith(".m3u8") or name.endswith(".mpd")
 
 
-def _rank(url: str):
+def _rank(url: str, provenance: int = _FROM_SWEEP):
     """Sort key, best first.
 
-    Resolution leads. Ordering by container instead would put a progressive
+    Provenance leads: a URL the page declares as its video (og:video, JSON-LD
+    contentUrl, the <video> element) beats one merely found in the markup,
+    however sharp the latter claims to be -- that is how the wrong video gets
+    downloaded from a page with several.
+
+    Then resolution. Ordering by container instead would put a progressive
     .mp4 above an .m3u8 unconditionally, so a page offering a 360p MP4 beside
     a 1080p ladder would hand over the 360p -- a download that succeeds and is
     simply the worst copy available.
@@ -105,6 +137,7 @@ def _rank(url: str):
     name = _filename(url)
     noisy = any(n in name or n in url.lower() for n in _NOISE)
     return (
+        provenance,
         1 if noisy else 0,
         -advertised_height(url),
         1 if is_manifest(url) else 0,
@@ -160,9 +193,53 @@ def extract_media_urls(markup: str) -> List[str]:
     return out
 
 
-def rank_media_urls(urls: List[str]) -> List[str]:
-    """Best first."""
-    return sorted(urls, key=_rank)
+def extract_declared_media(markup: str, page_url: Optional[str] = None) -> List[str]:
+    """Media URLs the page explicitly declares as its video, in document order.
+
+    Only absolute http(s) URLs pointing at a media file or manifest count.
+    An og:video that names a YouTube embed is a real lead too -- but that is
+    yt-dlp's territory (resolve() hands it whatever wins), so it is kept
+    when it is not obviously an image or the page itself.
+    """
+    text = unescape(markup)
+    out, seen = [], set()
+    for pattern in _DECLARED:
+        for raw in pattern.findall(text):
+            url = raw.strip()
+            if page_url and not url.startswith(("http://", "https://")):
+                url = urllib.parse.urljoin(page_url, url)
+            if not url.startswith(("http://", "https://")):
+                continue
+            if url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")):
+                continue
+            if page_url and url.rstrip("/") == page_url.rstrip("/"):
+                continue
+            if url.startswith(("blob:", "data:")):
+                continue
+            key = url.split("?", 1)[0]
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(url)
+    return out
+
+
+def rank_media_urls(urls: List[str], declared: Optional[List[str]] = None) -> List[str]:
+    """Best first. URLs also present in [declared] outrank the rest."""
+    declared_keys = {u.split("?", 1)[0] for u in (declared or [])}
+
+    def key(url):
+        provenance = _FROM_DECLARATION if url.split("?", 1)[0] in declared_keys else _FROM_SWEEP
+        return _rank(url, provenance)
+
+    merged, seen = [], set()
+    for url in list(declared or []) + list(urls):
+        k = url.split("?", 1)[0]
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append(url)
+    return sorted(merged, key=key)
 
 
 def find_media_urls(page_url: str, timeout: float = 25.0) -> List[str]:
@@ -174,7 +251,7 @@ def find_media_urls(page_url: str, timeout: float = 25.0) -> List[str]:
     if not html:
         return []
 
-    return rank_media_urls(extract_media_urls(html))
+    return rank_media_urls(extract_media_urls(html), extract_declared_media(html, page_url))
 
 
 def resolve(page_url: str, timeout: float = 25.0) -> Optional[str]:

@@ -1,3 +1,4 @@
+import gc
 import os
 import platform
 import queue
@@ -11,6 +12,7 @@ from queue_manager import QueueManager
 from engine import Status
 import video_capture
 import vdr_log
+from video_progress import VideoProgress, format_eta
 from organizer import categorized_destination, organize_completed_file
 from desktop_integration import bind_macos_reopen, create_integration
 from focus_guard import FocusGuard, POLICY_HOLD
@@ -109,10 +111,26 @@ def _enable_mac_clipboard_shortcuts(root):
 
 
 class VideoTask:
+    # How many yt-dlp downloads run at once. Each one is a Python thread
+    # driving ffmpeg and several HTTP connections; the regular-file queue
+    # already caps itself at QueueManager.max_concurrent, but videos used to
+    # bypass that entirely -- ten clicks on the ⬇ VDR button meant ten
+    # simultaneous downloads fighting for the same connection.
+    MAX_CONCURRENT = 2
+    _slots = threading.BoundedSemaphore(MAX_CONCURRENT)
+    PLACEHOLDER = "(fetching title…)"
+
     def __init__(self, url, dest_dir):
         self.url = url
-        self.dest_path = os.path.join(dest_dir, "(fetching title…)")
+        self.dest_path = os.path.join(dest_dir, self.PLACEHOLDER)
         self.total_size = None
+        # True while total_size is yt-dlp's running guess (HLS/DASH) rather
+        # than a measured Content-Length. _refresh() shows such sizes as "~".
+        self.size_estimated = False
+        self.eta = None
+        self.error_message = ""
+        # Set when the user confirmed "yes, download the whole playlist".
+        self.allow_playlist = False
         self.status = Status.QUEUED
         self.speed = 0.0
         self._downloaded = 0
@@ -156,10 +174,23 @@ class VideoTask:
             self.start_fn()
         elif self.status == Status.HELD:
             self.release_from_focus()
+        elif self.status == Status.ERROR and self.start_fn:
+            # Resume on a failed row is a retry -- the same thing the
+            # regular-file DownloadTask.resume() does for its ERROR state.
+            # Partial fragments from the failed run are picked up by yt-dlp's
+            # continuedl, so a transient failure costs only the gap.
+            self._user_paused = False
+            self.error_message = ""
+            self.stop_event.clear()
+            self.status = Status.QUEUED
+            self.start_fn()
 
     def cancel(self):
-        self.stop_event.set()
+        # Order matters: the progress hook reads `status` to decide whether
+        # to raise DownloadCancelled (discard partials) or DownloadPaused
+        # (keep them), so it has to be CANCELLED before the event fires.
         self.status = Status.CANCELLED
+        self.stop_event.set()
 
 
 class App:
@@ -430,40 +461,77 @@ class App:
         self._events.put(("task", task))
         self._events.put(("info", "Video/stream download started — it now shows up in the list below."))
 
-        def hook(d):
-            if task.stop_event.is_set():
-                raise video_capture.DownloadPaused()
-            if "postprocessor" in d:
-                # Fires after merging/converting -- this is the only place
-                # that reports the real final filepath (progress_hooks only
-                # ever see each fragment's temp filename, which gets deleted
-                # once merged).
-                if d.get("status") == "finished":
-                    info = d.get("info_dict") or {}
-                    final_path = info.get("filepath") or info.get("_filename")
-                    if final_path:
-                        task.dest_path = final_path
-                return
-            filename = d.get("filename")
-            if filename:
-                task.dest_path = filename
-            if d.get("status") == "downloading":
-                task.status = Status.DOWNLOADING
-                task.total_size = d.get("total_bytes") or d.get("total_bytes_estimate")
-                task._downloaded = d.get("downloaded_bytes", 0)
-                task.speed = d.get("speed") or 0.0
+        def on_info(info):
+            # Pre-flight resolved the title before any bytes moved: name the
+            # row now instead of showing "(fetching title…)" until the first
+            # fragment lands. The real filename replaces this via the hooks.
+            if not os.path.exists(task.dest_path):
+                task.dest_path = os.path.join(DEFAULT_DIR, info.suggested_filename())
+
+        def make_hook(progress):
+            def hook(d):
+                if task.stop_event.is_set():
+                    if task.status == Status.CANCELLED:
+                        raise video_capture.DownloadCancelled()
+                    raise video_capture.DownloadPaused()
+                progress.update(d)
+                # Prefer the merged/converted file once it exists; until
+                # then the current stream's temp name is the best label.
+                if progress.final_path:
+                    task.dest_path = progress.final_path
+                elif progress.expected_path:
+                    task.dest_path = progress.expected_path
+                elif progress.current_filename:
+                    task.dest_path = progress.current_filename
+                if d.get("status") == "downloading":
+                    task.status = Status.DOWNLOADING
+                task.total_size = progress.total
+                task.size_estimated = progress.estimated
+                task._downloaded = progress.downloaded
+                task.speed = progress.speed
+                task.eta = progress.eta
+            return hook
 
         def run():
+            # Wait for a slot without going deaf to Pause/Cancel: a queued
+            # video the user cancels must leave the queue, not start later.
+            while not task.stop_event.is_set():
+                if VideoTask._slots.acquire(timeout=0.25):
+                    break
+            else:
+                return
             try:
-                video_capture.download_video(url, DEFAULT_DIR, progress_hook=hook)
+                if task.stop_event.is_set():
+                    return
+                if self.qm.focus_policy == POLICY_HOLD and not task._user_paused:
+                    # Battery/Low Power came on while this sat in the queue.
+                    # Park it the way a running download would be parked;
+                    # release_from_focus() restarts it via start_fn.
+                    task.status = Status.HELD
+                    return
+                # Fresh accounting per attempt: on Resume, yt-dlp re-reports
+                # already-finished streams as "finished" and resumed ones with
+                # their full byte count, so starting from zero stays correct.
+                progress = VideoProgress()
+                video_capture.download_video(
+                    url, DEFAULT_DIR,
+                    progress_hook=make_hook(progress),
+                    allow_playlist=task.allow_playlist,
+                    info_cb=on_info,
+                )
                 task.status = Status.COMPLETED
                 task.speed = 0.0
+                task.eta = None
                 self._events.put(("info", f"Video download complete:\n{url}"))
             except video_capture.DownloadPaused:
-                pass  # status is already PAUSED; not an error
+                pass  # deliberate stop (pause / hold / cancel); status already set
+            except video_capture.PlaylistDetected as e:
+                # Not an error: ask, on the main thread, and re-run if yes.
+                self._events.put(("playlist", (task, e)))
             except Exception as e:
                 if task.status != Status.CANCELLED:
                     task.status = Status.ERROR
+                    task.error_message = str(e)
                     # Was traceback.print_exc(). In the frozen windowed build
                     # sys.stderr is None, so that call raised AttributeError
                     # here inside the handler -- killing this thread before
@@ -471,9 +539,49 @@ class App:
                     # The row went red and the user was told nothing at all.
                     vdr_log.get_logger().exception("video download failed: %s", url)
                     self._events.put(("error", f"Video download failed:\n{e}"))
+            finally:
+                VideoTask._slots.release()
+                # yt-dlp's exceptions carry tracebacks whose frames hold the
+                # downloader's open output file; the cycle they form is only
+                # broken by the cyclic collector. Run it now so a cancelled
+                # or failed stream's .part handle is released immediately
+                # rather than whenever the GC next feels like it.
+                gc.collect()
 
         task.start_fn = lambda: threading.Thread(target=run, daemon=True).start()
         task.start_fn()
+
+    def _ask_playlist(self, task, detected):
+        """Main-thread follow-up to PlaylistDetected: confirm, then re-run.
+
+        A yes/no question the user must answer is the one place a modal is
+        acceptable; it is short, user-initiated, and there is no sensible
+        default -- silently downloading 400 videos or silently downloading
+        nothing are both wrong.
+        """
+        if task in self._removed_tasks or task.status == Status.CANCELLED:
+            return
+        count = detected.count
+        n = f"all {count} videos" if count else "every video in it"
+        yes = messagebox.askyesno(
+            "Playlist",
+            f"{detected.title} is a playlist.\n\nDownload {n}?",
+            parent=self.root,
+        )
+        if yes:
+            task.allow_playlist = True
+            task.status = Status.QUEUED
+            task.start_fn()
+            return
+        # Declined: drop the row rather than leave a "queued" ghost.
+        task.status = Status.CANCELLED
+        self._removed_tasks.add(task)
+        iid = self.row_by_task.pop(task, None)
+        if iid:
+            try:
+                self.tree.delete(iid)
+            except tk.TclError:
+                pass
 
     def _reroute_page(self, task):
         """Re-queue a page URL as a video, and drop the failed file row."""
@@ -523,22 +631,51 @@ class App:
                     self.mac.notify_completion("VDR — download failed", payload)
                 elif kind == "focus":
                     self.focus_status.config(text=payload)
+                elif kind == "playlist":
+                    task, detected = payload
+                    self._ask_playlist(task, detected)
         except queue.Empty:
             pass
         self.root.after(200, self._drain_events)
 
+    @staticmethod
+    def _row_values(task):
+        """The five Treeview cells for a task. Pure, so it can be unit-tested."""
+        estimated = bool(getattr(task, "size_estimated", False))
+        size = human_size(task.total_size)
+        if estimated and task.total_size:
+            # A tilde is the difference between "this file is 280 MB" and
+            # "yt-dlp guesses about 280 MB from the fragments so far". For
+            # HLS the guess moves; saying so stops it reading as a bug.
+            size = "~" + size
+        downloaded = task.bytes_downloaded()
+        if task.total_size:
+            frac = min(1.0, downloaded / task.total_size)
+            pct = f"{frac * 100:.1f}%  ({human_size(downloaded)}/{size})"
+        else:
+            pct = human_size(downloaded)
+        speed = human_size(task.speed) + "/s" if task.speed else "-"
+        eta = format_eta(getattr(task, "eta", None)) if task.status == Status.DOWNLOADING else ""
+        if eta:
+            speed = f"{speed}, {eta}"
+        status = task.status.value
+        message = getattr(task, "error_message", "")
+        if task.status == Status.ERROR and message:
+            status = f"error — {' '.join(message.split())}"
+        name = os.path.basename(task.dest_path)
+        if name == VideoTask.PLACEHOLDER and task.status not in (
+            Status.QUEUED, Status.CONNECTING, Status.HELD
+        ):
+            # Title never resolved (extraction failed, or it was cancelled
+            # first). Show what the user actually asked for, not a promise.
+            name = getattr(task, "url", "") or name
+        return (name, size, pct, speed, status)
+
     def _refresh(self):
         active = []
         for task, iid in list(self.row_by_task.items()):
-            size = human_size(task.total_size)
-            downloaded = task.bytes_downloaded()
-            if task.total_size:
-                pct = f"{(downloaded / task.total_size * 100):.1f}%  ({human_size(downloaded)}/{size})"
-            else:
-                pct = human_size(downloaded)
-            speed = human_size(task.speed) + "/s" if task.speed else "-"
             try:
-                self.tree.item(iid, values=(os.path.basename(task.dest_path), size, pct, speed, task.status.value))
+                self.tree.item(iid, values=self._row_values(task))
             except tk.TclError:
                 pass
             if task.status in (Status.CONNECTING, Status.DOWNLOADING):
@@ -560,7 +697,7 @@ class App:
                 self._reroute_page(task)
         # A percentage is more useful for one download; otherwise match Mail's count.
         if len(active) == 1 and active[0].total_size:
-            badge = str(round(active[0].bytes_downloaded() / active[0].total_size * 100))
+            badge = str(min(100, round(active[0].bytes_downloaded() / active[0].total_size * 100)))
             progress = f"{badge}%"
         else:
             badge = str(len(active)) if active else ""
@@ -607,6 +744,8 @@ class App:
         # against a stream total that no longer means anything.
         if hasattr(task, "_downloaded"):
             task._downloaded = size
+        if hasattr(task, "size_estimated"):
+            task.size_estimated = False  # measured now, not guessed
 
     def _on_close_window(self):
         """Hide rather than quit -- but only while something can bring it back.
