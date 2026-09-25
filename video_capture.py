@@ -10,13 +10,34 @@ respect the terms of service of whatever site you're pulling from.
 import os
 import shutil
 import sys
-from typing import Callable, Optional
+from dataclasses import dataclass, field
+from typing import Callable, List, Optional
 
 import yt_dlp
 import yt_dlp.extractor as _ie_mod
 
 import page_media
 import vdr_log
+from video_progress import SIZE_PROBE_KEY
+
+
+class VDRSizeProbePP(yt_dlp.postprocessor.PostProcessor):
+    """Does nothing -- exists so its hook fires with the full info dict.
+
+    Registered `before_dl`, after format selection. yt-dlp wraps every
+    postprocessor's run() in "started"/"finished" hook calls that carry the
+    complete info dict, `requested_formats` and `_filename` included. The
+    per-stream progress hooks never see those (yt-dlp deletes
+    requested_formats before handing each stream down), so this is how the
+    UI learns the whole download's size and final name before the first byte.
+    pp_key() strips the trailing "PP", giving video_progress.SIZE_PROBE_KEY.
+    """
+
+    def run(self, info):
+        return [], info
+
+
+assert VDRSizeProbePP.pp_key() == SIZE_PROBE_KEY
 
 
 def _bundled_ffmpeg_dir():
@@ -151,12 +172,196 @@ _COOKIE_BROWSERS = cookie_browsers()
 # Default ceiling on video height. See download_video() for why this exists.
 MAX_HEIGHT = 1080
 
+# One plain HTTP MP4 with both tracks, H.264 or codec-unknown, at or under
+# the cap. Used ahead of the merged selectors when prefers_progressive() says
+# the site's plain file is as good as its ladder (X, Reddit, most non-YouTube
+# sites). See download_video() for the `?` (none-inclusive) filters.
+PROGRESSIVE_FORMAT = (
+    f"b[ext=mp4][height<={MAX_HEIGHT}][protocol^=http][protocol!*=dash]"
+    f"[vcodec!^=?vp][vcodec!^=?av01]"
+)
+
 
 class DownloadPaused(Exception):
     """Raise from a progress_hook to intentionally abort an in-progress
     download (e.g. the user clicked Pause). yt-dlp's downloader resumes
     from partial fragments by default, so a later call with the same URL
     picks back up rather than starting over."""
+
+
+class DownloadCancelled(DownloadPaused):
+    """Raise from a progress_hook when the user cancelled outright.
+
+    A subclass so every "deliberate stop, not a failure" check keeps
+    working, but download_video() treats the two differently: a pause keeps
+    its partial fragments for Resume, a cancel deletes them. Before this the
+    two were one exception, and Cancel left `.part` files in the folder for
+    good -- 60 MB of an X video the user explicitly said they did not want.
+    """
+
+
+class LiveStream(Exception):
+    """The URL is a broadcast that is still going (or has not started).
+
+    yt-dlp will happily record a live HLS stream, appending segments until
+    the broadcaster stops -- hours later, or never. In a download manager
+    that shows up as a file whose size climbs forever with no total, which
+    is exactly what a user reported. Refusing up front, with a reason, is
+    the honest answer until VDR has a real "record live stream" feature.
+    """
+
+
+class PlaylistDetected(Exception):
+    """The URL is a whole playlist/channel, not one video.
+
+    Raised before anything is downloaded so the UI can ask, rather than
+    silently fetching dozens of videos the user may not have meant.
+    """
+
+    def __init__(self, url: str, count: int, title: str = ""):
+        self.url = url
+        self.count = count
+        self.title = title or "This link"
+        n = f"{count} videos" if count else "many videos"
+        super().__init__(f"{self.title} is a playlist of {n}.")
+
+
+@dataclass
+class MediaInfo:
+    """What a pre-flight look at the URL revealed, before any bytes move."""
+
+    title: str = ""
+    id: str = ""
+    ext: str = "mp4"
+    duration: Optional[float] = None
+    is_live: bool = False
+    is_upcoming: bool = False
+    is_playlist: bool = False
+    entry_count: int = 0
+    extractor: str = ""
+    formats: List[dict] = field(default_factory=list)
+
+    def suggested_filename(self) -> str:
+        """Mirrors download_video()'s outtmpl closely enough for a row label."""
+        title = (self.title or "video")[:150]
+        if self.is_playlist:
+            n = f" ({self.entry_count} videos)" if self.entry_count else ""
+            return f"{title}{n}"
+        tag = f" [{self.id}]" if self.id else ""
+        return f"{title}{tag}.{self.ext or 'mp4'}"
+
+
+def inspect(url: str, extra_opts: Optional[dict] = None) -> Optional[MediaInfo]:
+    """Resolve title / live-ness / playlist-ness / formats without downloading.
+
+    Best effort: returns None when yt-dlp cannot extract (unknown site, login
+    wall, transient error). Callers then proceed exactly as before, so a
+    failing pre-flight can never make a download fail that would otherwise
+    have worked -- download_video()'s own fallback chain handles those.
+
+    Playlists are read "flat" (one request for the listing, none per entry)
+    so a 500-video channel costs one round trip to identify as a playlist.
+    """
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+        "extract_flat": "in_playlist",
+        "socket_timeout": 20,
+        "logger": vdr_log.YtdlpLogger(vdr_log.get_logger()),
+        **(extra_opts or {}),
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        vdr_log.get_logger().info("pre-flight could not read %s: %s: %s", url, type(e).__name__, e)
+        return None
+    if not info:
+        return None
+    if info.get("_type") == "playlist":
+        entries = info.get("entries") or []
+        try:
+            entries = list(entries)
+        except Exception:
+            entries = []
+        return MediaInfo(
+            title=info.get("title") or "",
+            id=str(info.get("id") or ""),
+            is_playlist=True,
+            entry_count=len(entries) or int(info.get("playlist_count") or 0),
+            extractor=info.get("extractor_key") or "",
+        )
+    live_status = info.get("live_status")
+    return MediaInfo(
+        title=info.get("title") or "",
+        id=str(info.get("id") or ""),
+        ext=info.get("ext") or "mp4",
+        duration=info.get("duration"),
+        is_live=bool(info.get("is_live")) or live_status == "is_live",
+        is_upcoming=live_status == "is_upcoming",
+        extractor=info.get("extractor_key") or "",
+        formats=list(info.get("formats") or []),
+    )
+
+
+def _is_progressive(f: dict) -> bool:
+    """A single file carrying both video and audio over plain HTTP."""
+    if f.get("vcodec") == "none" or f.get("acodec") == "none":
+        return False
+    proto = str(f.get("protocol") or "")
+    if proto.startswith("m3u8") or "dash" in proto or proto in ("ism", "rtmp", "rtsp", "mms"):
+        return False
+    if (f.get("ext") or "") != "mp4":
+        return False
+    vcodec = f.get("vcodec")
+    # Unknown (None) is fine -- sites like X report no codec for their
+    # progressive MP4s, and they are H.264 in practice. A *known* non-H.264
+    # codec is not: QuickTime can't play it, which is the whole point.
+    return vcodec is None or str(vcodec).startswith(("avc1", "h264"))
+
+
+def prefers_progressive(formats: List[dict], max_height: int = MAX_HEIGHT) -> bool:
+    """Should this video be fetched as one plain MP4 rather than merged streams?
+
+    The default selectors ask for `bv*[vcodec^=avc1]+ba` -- the best H.264
+    video stream plus the best audio, merged by ffmpeg. That is right for
+    YouTube, whose progressive files stop at 360p/720p. It is wrong for X,
+    Reddit and most non-YouTube sites, which publish progressive MP4s at the
+    *same* top resolution as their HLS ladder -- there the selector picks the
+    HLS variant purely because it happens to carry a codec tag, and the user
+    gets a segment-by-segment download with no known total size, an ffmpeg
+    remux at the end, and a Size column that drifts upward for the whole
+    download. The plain file has an exact Content-Length, needs no merge,
+    and is the same picture.
+
+    So: prefer progressive when the best progressive height is at least the
+    best height any *other* H.264 stream offers (both capped at max_height).
+    """
+    if not formats:
+        return False
+
+    def height(f):
+        return f.get("height") or 0
+
+    prog = [f for f in formats if _is_progressive(f) and height(f) <= max_height]
+    if not prog:
+        return False
+    separate = [
+        f for f in formats
+        if not _is_progressive(f)
+        and f.get("vcodec") not in (None, "none")
+        and str(f.get("vcodec")).startswith(("avc1", "h264"))
+        and height(f) <= max_height
+    ]
+    best_prog = max(height(f) for f in prog)
+    best_sep = max((height(f) for f in separate), default=0)
+    if best_prog == 0 and best_sep == 0:
+        # Neither side states a height. A plain file is still the safer
+        # download (exact size, no remux), so take it.
+        return True
+    return best_prog >= best_sep
 
 
 def is_supported(url: str) -> bool:
@@ -174,6 +379,27 @@ def get_info(url: str) -> dict:
         return ydl.extract_info(url, download=False)
 
 
+def _detach(err: Exception) -> Exception:
+    """Drop an exception's traceback before handing it up.
+
+    A traceback pins every frame it passed through, and for a stop raised
+    from inside a progress hook those frames include yt-dlp's fragment
+    downloader with its open output file. The exception, its traceback and
+    the frames' locals form a reference cycle, so nothing is freed until the
+    cyclic collector happens to run -- in an idle GUI process that can be
+    minutes. The visible symptom: a `.part` file deleted from the folder but
+    still held open by VDR, its 60 MB not returned to the disk until quit.
+    A deliberate pause/cancel has no traceback worth keeping.
+    """
+    err.__traceback__ = None
+    return err
+
+
+def _sidecars(path: str) -> List[str]:
+    """The temp files yt-dlp creates alongside a stream it is writing."""
+    return [path, path + ".part", path + ".ytdl", path + ".part-Frag0"]
+
+
 def download_video(
     url: str,
     dest_dir: str,
@@ -181,19 +407,76 @@ def download_video(
     progress_hook: Optional[Callable] = None,
     audio_only: bool = False,
     _resolved: bool = False,
+    allow_playlist: bool = False,
+    allow_live: bool = False,
+    info_cb: Optional[Callable[[MediaInfo], None]] = None,
 ):
+    """Download [url] into [dest_dir], choosing formats and recovering from
+    the usual site-specific failures.
+
+    Raises PlaylistDetected / LiveStream before any bytes move when the URL
+    is not a single finished video and the caller has not opted in. Raises
+    DownloadPaused / DownloadCancelled when the progress hook did (a
+    deliberate stop). Anything else that escapes is a real failure, already
+    made presentable by _friendly_error().
+    """
     os.makedirs(dest_dir, exist_ok=True)
+
+    # Look before downloading. Cheap relative to the download, and it is the
+    # only way to answer "is this live?" / "is this 400 videos?" / "what is
+    # it called?" before committing. See inspect() for why a failure here is
+    # not a failure of the download.
+    info = inspect(url)
+    if info is not None:
+        if info.is_playlist and not allow_playlist:
+            raise PlaylistDetected(url, info.entry_count, info.title)
+        if info.is_upcoming and not allow_live:
+            raise LiveStream(
+                f"“{info.title or url}” is a scheduled live stream that hasn't started. "
+                "There is nothing to download yet."
+            )
+        if info.is_live and not allow_live:
+            raise LiveStream(
+                f"“{info.title or url}” is a live stream that is still broadcasting. "
+                "VDR downloads finished videos, so its size would keep growing "
+                "until the stream ends. Try again once the broadcast is over."
+            )
+        if info_cb:
+            try:
+                info_cb(info)
+            except Exception:
+                pass
+
+    # Every file this call touches, as reported by yt-dlp itself. This is
+    # what a cancel deletes -- not "everything new in the folder", which
+    # would also catch a *different* download that finished in between.
+    touched: set = set()
+
+    def _hook(d):
+        for key in ("filename", "tmpfilename"):
+            name = d.get(key)
+            if name:
+                touched.add(name)
+        pp_info = d.get("info_dict") if "postprocessor" in d else None
+        if pp_info:
+            for key in ("filepath", "_filename"):
+                name = pp_info.get(key)
+                if name:
+                    touched.add(name)
+        if progress_hook:
+            progress_hook(d)
+
     ffmpeg_dir = _bundled_ffmpeg_dir()
     base_opts = {
         "outtmpl": os.path.join(dest_dir, "%(title).150B [%(id)s].%(ext)s"),
         "merge_output_format": "mp4",
         **({"ffmpeg_location": ffmpeg_dir} if ffmpeg_dir else {}),
-        "progress_hooks": [progress_hook] if progress_hook else [],
+        "progress_hooks": [_hook],
         # progress_hooks only report each fragment's own temp filename (e.g.
         # "...f137.mp4"), which yt-dlp deletes once it's merged. postprocessor_hooks
         # additionally fire with the real final filepath once merging/conversion
         # finishes -- callers need that to know what file actually exists at the end.
-        "postprocessor_hooks": [progress_hook] if progress_hook else [],
+        "postprocessor_hooks": [_hook],
         # "Download only the video, if the URL refers to a video AND a
         # playlist." This was False, which is how clicking the ⬇ VDR button on
         # a video downloaded a different one: YouTube puts almost every music
@@ -277,17 +560,46 @@ def download_video(
         if not _ffmpeg_available():
             attempts.append({"format": f"b[ext=mp4][height<={MAX_HEIGHT}]/b[ext=mp4]/b",
                              "postprocessors": []})
+        # When the site offers a plain MP4 at the same resolution the merged
+        # selectors would reach, take the plain file first -- see
+        # prefers_progressive() for why. `protocol` filters keep HLS and DASH
+        # variants out even when they also carry an mp4 extension. The `?`
+        # in the codec filters makes them none-inclusive: X reports no
+        # vcodec at all for its progressive files, and without the `?`
+        # yt-dlp drops a format whose field is missing, matching nothing.
+        if info is not None and prefers_progressive(info.formats):
+            attempts.insert(0, {"format": PROGRESSIVE_FORMAT, "postprocessors": []})
 
-    # Snapshotted once, before any attempt, so give_up() can tell what this
-    # call created from what was already sitting in the folder.
-    before_any = set(os.listdir(dest_dir))
+    def discard_partials():
+        """Delete what this call was writing. Used by cancel and give_up.
+
+        Pause must never come here: its partial fragments are what Resume
+        continues from. The list comes from yt-dlp's own hook reports, plus
+        the `.part` / `.ytdl` companions it writes beside each stream. It
+        used to be "everything new in the folder since we started", which
+        with two videos downloading at once meant one failing could delete
+        the other's half-finished streams.
+        """
+        for name in list(touched):
+            for path in _sidecars(name):
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                except OSError:
+                    pass
 
     def _try(extra_opts) -> Optional[Exception]:
         """Run one attempt. Returns None on success, or the exception raised."""
         try:
             with yt_dlp.YoutubeDL({**base_opts, **extra_opts}) as ydl:
+                ydl.add_post_processor(VDRSizeProbePP(ydl), when="before_dl")
                 ydl.download([url])
             return None
+        except DownloadCancelled as e:
+            discard_partials()
+            return _detach(e)
+        except DownloadPaused as e:
+            return _detach(e)
         except Exception as e:
             # Deliberately leaves partial fragments in place for the next
             # attempt. This used to delete everything the attempt produced,
@@ -317,11 +629,7 @@ def download_video(
         show up in the user's folder as a file that looks real but is not.
         """
         vdr_log.get_logger().error("giving up on %s: %s: %s", url, type(err).__name__, err)
-        for name in set(os.listdir(dest_dir)) - before_any:
-            try:
-                os.remove(os.path.join(dest_dir, name))
-            except OSError:
-                pass
+        discard_partials()
         raise _friendly_error(err)
 
     last_err = None
@@ -380,6 +688,9 @@ def download_video(
                 progress_hook=progress_hook,
                 audio_only=audio_only,
                 _resolved=True,
+                allow_playlist=allow_playlist,
+                allow_live=allow_live,
+                info_cb=info_cb,
             )
 
     give_up(last_err)
