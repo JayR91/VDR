@@ -166,6 +166,46 @@ check(
     ),
 )
 check(
+    "Hotstar's registered-users wall counts as login",
+    video_capture._looks_like_login_required(
+        Exception(
+            "[hotstar] 123: This video is only available for registered users. "
+            "Use --cookies-from-browser or --cookies for the authentication."
+        )
+    ),
+)
+check(
+    "macOS permission denial counts as a cookie-store failure",
+    video_capture._looks_like_cookie_store_failure(
+        Exception(
+            "[Errno 1] Operation not permitted: '/Users/x/Library/Containers/"
+            "com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies'"
+        )
+    ),
+)
+check(
+    "DRM stays a plain DRM refusal",
+    isinstance(
+        video_capture._friendly_error(
+            Exception("[hotstar] 123: This video is DRM protected")
+        ),
+        video_capture.DRMProtected,
+    ),
+)
+check(
+    "registered-users wall becomes a login hint",
+    isinstance(
+        video_capture._friendly_error(
+            Exception(
+                "[hotstar] 123: This video is only available for registered "
+                "users. Use --cookies-from-browser or --cookies for the "
+                "authentication."
+            )
+        ),
+        video_capture.LoginRequired,
+    ),
+)
+check(
     "YouTube bot check still looks like login",
     video_capture._looks_like_login_required(
         Exception("Sign in to confirm you're not a bot")

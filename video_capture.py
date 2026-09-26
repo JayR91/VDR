@@ -650,6 +650,9 @@ def download_video(
     # out of the picture for ordinary failures like a 404 or a dropped network.
     if _looks_like_login_required(last_err):
         for browser in cookie_browsers():
+            vdr_log.get_logger().info(
+                "login wall on %s -- retrying with %s cookies", url, browser
+            )
             for extra_opts in attempts:
                 # Every format tier, not just the first: signing in only gets
                 # past the login wall, and the site may still have no stream
@@ -703,6 +706,13 @@ _LOGIN_MARKERS = (
     "sign in to confirm",
     "members-only",
     "this video is available to this channel's members",
+    # yt-dlp's raise_login_required() appends this exact suffix, and each
+    # site's own wording varies around it -- Hotstar says "This video is only
+    # available for registered users". Before these two, that wall went
+    # unrecognised for Hotstar: the browser-cookie retry below never ran at
+    # all, and the user got yt-dlp's raw flag-laden error instead.
+    "--cookies-from-browser",
+    "registered users",
 )
 
 
@@ -722,6 +732,14 @@ _COOKIE_STORE_MARKERS = (
     "no such browser",
     "unsupported cookie",
     "could not find chrome cookies",
+    # macOS refuses one app access to another app's data unless the privacy
+    # prompt was accepted: Safari's cookie store needs Full Disk Access, and
+    # a denied Chrome keychain read surfaces here too. Classifying these as
+    # store failures keeps the original, actionable login error on screen
+    # instead of "[Errno 1] Operation not permitted: .../Cookies.binarycookies".
+    "operation not permitted",
+    "permission denied",
+    "user interaction is not allowed",
 )
 
 
@@ -761,6 +779,7 @@ def _friendly_error(err: Exception) -> Exception:
             "This video requires being signed in. VDR already tried your "
             "Safari, Chrome and Firefox sessions without finding one that "
             "works — sign in to the site in one of those browsers, then try "
-            "again."
+            "again. If macOS asks for keychain access (or Safari's cookies "
+            "need VDR to have Full Disk Access), allow it and retry."
         )
     return err
