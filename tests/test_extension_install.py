@@ -202,9 +202,12 @@ check(
     "Linux has no browser setup steps",
     extension_install.browser_setup_steps(Path("/tmp/vdr-ext"), platform="linux") == [],
 )
+tmp_ext = Path("/tmp/vdr-ext")
 check(
     "setup instructions name the folder",
-    "/tmp/vdr-ext" in extension_install.setup_instructions(Path("/tmp/vdr-ext")),
+    # str(Path) renders with backslashes on Windows, so compare the same way
+    # the message builds the path rather than against a literal "/tmp/...".
+    str(tmp_ext) in extension_install.setup_instructions(tmp_ext),
 )
 check("refresh_tree is public for build_extension.py", callable(extension_install.refresh_tree))
 
