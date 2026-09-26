@@ -7,8 +7,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 VDR ("Video Downloader") is a desktop download manager built in Python: a
 Tkinter GUI, a segmented/resumable HTTP download engine, yt-dlp-based video capture, a local Flask
 server for a companion Chrome extension, and macOS-specific integration (Dock badge, native
-notifications, a menu-bar URL drop target, and a "Focus Guard" that adapts download behavior to
-battery/idle state).
+notifications, a menu-bar URL drop target plus a one-time "Setup Browser
+Extension…" helper, and a "Focus Guard" that adapts download behavior to battery/idle state).
 
 **Note:** `laser_wars/` is a separate, unrelated turn-based strategy game living in this same
 directory — it is not part of the download manager and has its own `README.md`/`requirements.txt`.
@@ -158,8 +158,12 @@ can block a content script's own `fetch()` to `127.0.0.1` but not the background
 feeds with many videos per page (X), `findPostUrl()` resolves the clicked `<video>` to its own
 post via the `<a><time>` permalink inside the enclosing `<article>` — the *first* `/status/`
 link in the article is often a reply-to or quoted post, which is how the wrong video got
-downloaded. Edit `browser_extension/` then re-run `scripts/build_extension.py`; browsers load the
-copies under `~/Library/Application Support/VDR/extension-*`, not the checkout.
+downloaded. Edit `browser_extension/` then re-run `scripts/build_extension.py` (restarting the
+app also refreshes the copies in place on every launch — see `extension_install.stage_unpacked`);
+browsers load the stable copies under `~/Library/Application Support/VDR/extension-*`, not the
+checkout. The manifest `key` pins the extension id, so refreshes and upgrades never re-id it,
+and the app's "Setup Browser Extension…" menu item walks a user through the one-time "Load
+unpacked" (Chromium >= 136 refuses a scripted install on the default profile).
 
 ## Non-obvious gotchas
 

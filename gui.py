@@ -303,7 +303,12 @@ class App:
         )
         self._activity_clear_job = None
 
-        self.mac = create_integration(self.add_url_from_drop, self.show_window, self.quit_app)
+        self.mac = create_integration(
+            self.add_url_from_drop,
+            self.show_window,
+            self.quit_app,
+            self.setup_browser_extension,
+        )
         self.root.after(700, self.mac.install_menu_bar)
         # Make sure the window is actually up front when the app is opened,
         # rather than buried behind whatever the user was already looking at.
@@ -323,8 +328,12 @@ class App:
         self.root.after(200, self._drain_events)
         self.root.after(500, self._refresh)
         self.root.after(1500, self._sync_system_theme)
-        if platform.system() == "Windows":
-            self.root.after(900, self._ensure_windows_extension)
+        # Refresh the latch's on-disk copy on every platform. Windows Setup
+        # registers it and the DMG build writes the first macOS copy, but the
+        # launch-time refresh is what keeps the folder a browser has loaded
+        # current after an upgrade. It never opens a browser (see below);
+        # setup_browser_extension() is the one that does, on request.
+        self.root.after(900, self._ensure_browser_extension)
 
     def _system_is_dark(self):
         # os.uname() is Unix-only -- calling it on Windows raises
@@ -844,13 +853,14 @@ class App:
         self.speed_var.set(str(kb))
         self.qm.set_speed_limit(kb * 1024 if kb else None)
 
-    def _ensure_windows_extension(self):
-        """Refresh the ⬇ VDR latch files and registry on launch.
+    def _ensure_browser_extension(self):
+        """Refresh the ⬇ VDR latch files on launch, on every platform.
 
-        Setup already ran this. Doing it again picks up upgrades, so the
-        extension folder Chrome has loaded stays current. The copy is in
-        place, never a delete-and-recreate, so a browser holding that folder
-        open does not lose the extension mid-session.
+        Setup already ran this on Windows, and the DMG build writes the first
+        macOS copy, but doing it again on every launch picks up upgrades so
+        the extension folder a browser has loaded stays current. The copy is
+        in place, never a delete-and-recreate, so a browser holding that
+        folder open does not lose the extension mid-session.
 
         It deliberately never starts a browser. It used to pass
         launch_if_needed=True whenever Chrome happened to be closed, so VDR
@@ -877,6 +887,32 @@ class App:
                 )
             except Exception:
                 pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def setup_browser_extension(self):
+        """One-time setup helper for the menu-bar/tray "Setup Browser Extension…".
+
+        Refreshes the latch files, then reveals the folder Chrome should load
+        and opens its extensions page. Opening windows here is fine: the user
+        clicked the item, so this is a request, not the automatic launch
+        _ensure_browser_extension() deliberately avoids.
+        """
+        def work():
+            try:
+                import extension_install
+                extension_install.ensure_installed(
+                    try_cdp=False,
+                    close_browser_if_needed=False,
+                    launch_if_needed=False,
+                )
+                extension_install.run_browser_setup()
+                self._events.put((
+                    "info",
+                    "Extension files refreshed — in Chrome: Developer mode → "
+                    "Load unpacked → pick the revealed extension-chrome folder.",
+                ))
+            except Exception as e:
+                self._events.put(("info", f"Browser extension setup failed: {e}"))
         threading.Thread(target=work, daemon=True).start()
 
     def _toggle_focus_guard(self):

@@ -5,7 +5,13 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    # Unpacked Chromium/Firefox extension, so the frozen build can refresh
+    # the stable copy under ~/Library/Application Support/VDR on launch (see
+    # extension_install.stage_unpacked). VDR-windows.spec bundles the same
+    # tree; the DMG build also puts a copy in the disk image.
+    datas=[
+        ("browser_extension", "browser_extension"),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

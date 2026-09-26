@@ -1,9 +1,9 @@
-"""Ship and register the VDR Connector extension on Windows.
+"""Ship, refresh, and register the VDR Connector extension.
 
 The floating ⬇ VDR latch is the Chrome/Edge/Brave content script, not a Tk
-control. macOS already copies the unpacked extension to
-~/Library/Application Support/VDR; Windows Setup used to ship none of that,
-so a v2.2.3 user never saw the button.
+control. Every platform keeps the unpacked extension in a stable per-user
+folder (see install_root) and refreshes it on launch; Windows Setup used to
+ship none of that, so a v2.2.3 user never saw the button.
 
 On Windows this module:
 
@@ -140,8 +140,13 @@ def bundled_extension_src() -> Path:
     return Path(__file__).resolve().parent / "browser_extension"
 
 
-def _copy_tree(src: Path, dest: Path) -> None:
-    """Refresh dest from src without dropping the CDP registration marker."""
+def refresh_tree(src: Path, dest: Path) -> None:
+    """Copy src over dest in place, keeping the CDP registration marker.
+
+    Deliberately not a delete-and-recreate: Chromium holds the folder it
+    loaded unpacked, and removing it under a running browser drops the ⬇ VDR
+    latch for that session.
+    """
     dest.mkdir(parents=True, exist_ok=True)
     skip = {"__pycache__", ".DS_Store", MARKER_NAME}
     for path in src.rglob("*"):
@@ -172,8 +177,8 @@ def stage_unpacked(src: Optional[Path] = None, root: Optional[Path] = None) -> d
     root = root or install_root()
     chrome_dest = chrome_extension_dir(root)
     firefox_dest = firefox_extension_dir(root)
-    _copy_tree(src, chrome_dest)
-    _copy_tree(src, firefox_dest)
+    refresh_tree(src, chrome_dest)
+    refresh_tree(src, firefox_dest)
     (firefox_dest / "manifest.json").write_text(
         firefox_manifest_text(src / "manifest.json"), encoding="utf-8"
     )
@@ -774,7 +779,67 @@ def uninstall_windows_extension(winreg_mod=None) -> bool:
     return True
 
 
-def install_from_cli(*, uninstall: bool = False) -> bool:
+def browser_setup_steps(
+    chrome_dir: Optional[Path] = None, platform: Optional[str] = None
+) -> list:
+    """The one-time setup actions for a Chromium browser, as argv lists.
+
+    Reveal the folder Chrome should load and open its own extensions page.
+    Pure (no side effects) so tests can pin both platforms on any host.
+    """
+    chrome_dir = str(chrome_dir or chrome_extension_dir())
+    plat = sys.platform if platform is None else platform
+    if plat == "darwin":
+        return [
+            ["open", "-R", chrome_dir],
+            ["open", "-a", "Google Chrome", "chrome://extensions"],
+        ]
+    if plat == "win32":
+        steps = [["explorer", f"/select,{chrome_dir}"]]
+        for image, candidates in _CHROMIUM_EXES:
+            exe = _first_existing(candidates)
+            if exe is not None:
+                scheme = {"msedge.exe": "edge", "brave.exe": "brave"}.get(image, "chrome")
+                steps.append([str(exe), f"{scheme}://extensions"])
+                break
+        return steps
+    return []
+
+
+def run_browser_setup(steps=None) -> list:
+    """Run browser_setup_steps best-effort; never raises, never waits."""
+    ran = []
+    for argv in (steps if steps is not None else browser_setup_steps()):
+        try:
+            subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            continue
+        ran.append(argv[0])
+    return ran
+
+
+def setup_instructions(chrome_dir: Optional[Path] = None) -> str:
+    """Human-readable version of browser_setup_steps, for the CLI."""
+    chrome_dir = chrome_dir or chrome_extension_dir()
+    return (
+        f"Unpacked VDR Connector extension: {chrome_dir}\n"
+        "Load it once in Chrome: chrome://extensions -> Developer mode ->\n"
+        f"Load unpacked -> {chrome_dir}"
+    )
+
+
+def install_from_cli(
+    *, uninstall: bool = False, show_help: Optional[bool] = None
+) -> bool:
+    """`VDR --install-browser-extension` / `--uninstall-browser-extension`.
+
+    Windows Setup runs the install form silently during installation, so it
+    must not open anything there. On macOS the same flag is the one-time
+    setup helper a user runs by hand: stage the files, then reveal the folder
+    and open the browser's extensions page. The manual "Load unpacked" click
+    is unavoidable -- Chromium >= 136 refuses a debugging port on the default
+    profile, so nothing can do that part for the user.
+    """
     if uninstall:
         return uninstall_windows_extension()
     result = ensure_installed(
@@ -782,4 +847,10 @@ def install_from_cli(*, uninstall: bool = False) -> bool:
         close_browser_if_needed=True,
         launch_if_needed=True,
     )
-    return bool(result.get("ok"))
+    ok = bool(result.get("ok"))
+    if show_help is None:
+        show_help = sys.platform == "darwin"
+    if ok and show_help:
+        print(setup_instructions())
+        run_browser_setup()
+    return ok

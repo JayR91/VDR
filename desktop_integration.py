@@ -21,7 +21,8 @@ class NullIntegration:
     only the ornamental layer goes quiet.
     """
 
-    def __init__(self, add_url_callback=None, show_callback=None, quit_callback=None):
+    def __init__(self, add_url_callback=None, show_callback=None, quit_callback=None,
+                 setup_callback=None):
         self.available = False
         self.status_item = None
 
@@ -59,14 +60,15 @@ def bind_macos_reopen(root, callback, system=None):
         return False
 
 
-def create_integration(add_url_callback=None, show_callback=None, quit_callback=None):
+def create_integration(add_url_callback=None, show_callback=None, quit_callback=None,
+                       setup_callback=None):
     system = platform.system()
     if system == "Darwin":
         from macos_integration import MacIntegration
 
-        return MacIntegration(add_url_callback, show_callback, quit_callback)
+        return MacIntegration(add_url_callback, show_callback, quit_callback, setup_callback)
     if system == "Windows":
         from windows_integration import WindowsIntegration
 
-        return WindowsIntegration(add_url_callback, show_callback, quit_callback)
-    return NullIntegration(add_url_callback, show_callback, quit_callback)
+        return WindowsIntegration(add_url_callback, show_callback, quit_callback, setup_callback)
+    return NullIntegration(add_url_callback, show_callback, quit_callback, setup_callback)

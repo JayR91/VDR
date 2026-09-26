@@ -25,12 +25,14 @@ import threading
 
 
 class WindowsIntegration:
-    def __init__(self, add_url_callback=None, show_callback=None, quit_callback=None):
+    def __init__(self, add_url_callback=None, show_callback=None, quit_callback=None,
+                 setup_callback=None):
         self.available = False
         self.status_item = None
         self._add_url = add_url_callback
         self._show = show_callback
         self._quit = quit_callback
+        self._setup = setup_callback
         self._progress_text = ""
         self._icon = None
         self._thread = None
@@ -72,10 +74,15 @@ class WindowsIntegration:
             return
         import pystray
 
-        menu = pystray.Menu(
-            pystray.MenuItem("Show VDR", self._on_show, default=True),
-            pystray.MenuItem("Quit VDR", self._on_quit),
-        )
+        items = [pystray.MenuItem("Show VDR", self._on_show, default=True)]
+        if self._setup:
+            # Chrome/Edge >= 136 won't let Setup load the unpacked extension
+            # into the profile the user actually browses in, so the one-time
+            # "Load unpacked" is theirs to click. This item does the rest of
+            # the walkthrough and keeps it discoverable.
+            items.append(pystray.MenuItem("Setup Browser Extension…", self._on_setup))
+        items.append(pystray.MenuItem("Quit VDR", self._on_quit))
+        menu = pystray.Menu(*items)
         self._icon = pystray.Icon("VDR", self._make_image(), "VDR", menu)
         self.status_item = self._icon
 
@@ -108,6 +115,10 @@ class WindowsIntegration:
     def _on_show(self, icon=None, item=None):
         if self._show:
             self._show()
+
+    def _on_setup(self, icon=None, item=None):
+        if self._setup:
+            self._setup()
 
     def _on_quit(self, icon=None, item=None):
         # stop() ends the pump thread's message loop; the thread is a daemon

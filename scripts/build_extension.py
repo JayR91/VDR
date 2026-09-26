@@ -24,7 +24,6 @@ developers from source get; the frozen installer does it for everyone else.
 """
 import json
 import pathlib
-import shutil
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -34,9 +33,6 @@ import extension_install  # noqa: E402
 
 SRC = ROOT / "browser_extension"
 OUT = ROOT / "dist" / "extension-firefox"
-
-
-IGNORE = shutil.ignore_patterns("__pycache__", ".DS_Store", "*.pem")
 
 
 def _manifest_for(flavour: str) -> str:
@@ -55,10 +51,15 @@ def _manifest_for(flavour: str) -> str:
 
 
 def _sync(dest: pathlib.Path, flavour: str) -> pathlib.Path:
-    if dest.exists():
-        shutil.rmtree(dest)
+    """Refresh dest in place, never delete-and-recreate.
+
+    Chromium holds on to the folder it loaded unpacked, so replacing the
+    directory under a running browser loses the latch for that session.
+    refresh_tree also skips __pycache__/.DS_Store/*.pem and keeps the
+    registration marker.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(SRC, dest, ignore=IGNORE)
+    extension_install.refresh_tree(SRC, dest)
     if flavour != "chrome":
         (dest / "manifest.json").write_text(_manifest_for(flavour))
     return dest

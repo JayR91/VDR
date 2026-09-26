@@ -6,6 +6,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# pyinstaller/dmgbuild live in the project's virtualenv, not on a fresh
+# shell's PATH -- running this script from an unactivated shell died with
+# "pyinstaller: command not found", and the bare `python3` it fell back to
+# could not import dmgbuild. Resolve them here so CI and a bare terminal
+# behave the same, while still honouring anything already on PATH.
+if [ -x ".venv/bin/pyinstaller" ]; then PYINSTALLER=".venv/bin/pyinstaller"; else PYINSTALLER="pyinstaller"; fi
+if [ -x ".venv/bin/dmgbuild" ]; then DMGBUILD=".venv/bin/dmgbuild"; else DMGBUILD="dmgbuild"; fi
+if [ -x ".venv/bin/python" ]; then PYTHON=".venv/bin/python"; else PYTHON="python3"; fi
+
 # Version is passed by .github/workflows/release.yml (the tag name); local
 # builds get a placeholder, mirroring scripts/build_windows.ps1's -Version.
 #
@@ -33,7 +42,7 @@ DMG_NAME="VDR-${VERSION}-macOS-Installer.dmg"
 
 echo "==> Building '$APP_NAME.app' with PyInstaller"
 rm -rf build dist
-pyinstaller --noconfirm "$APP_NAME.spec"
+"$PYINSTALLER" --noconfirm "$APP_NAME.spec"
 
 if [ ! -d "dist/$APP_NAME.app" ]; then
   echo "PyInstaller did not produce dist/$APP_NAME.app" >&2
@@ -56,7 +65,7 @@ fi
 # build rather than shipping.
 pick_ffmpeg() {
   local candidate
-  candidate="$(python3 -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())' 2>/dev/null || true)"
+  candidate="$("$PYTHON" -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())' 2>/dev/null || true)"
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then
     echo "$candidate"
     return
@@ -95,7 +104,7 @@ else
 fi
 
 echo "==> Building per-browser extension packages"
-python3 scripts/build_extension.py
+"$PYTHON" scripts/build_extension.py
 
 # GPL compliance: the bundled ffmpeg is a GPLv3 build, so the license text and
 # the third-party notices (which carry the written offer for ffmpeg's source)
@@ -103,6 +112,50 @@ python3 scripts/build_extension.py
 echo "==> Bundling license + third-party notices"
 cp LICENSE "dist/$APP_NAME.app/Contents/Resources/LICENSE"
 cp THIRD-PARTY-NOTICES.md "dist/$APP_NAME.app/Contents/Resources/THIRD-PARTY-NOTICES.md"
+
+echo "==> Staging the browser extension folder for the disk image"
+# The app refreshes the *stable* copy in Application Support on launch (see
+# extension_install.stage_unpacked), and that is the copy Chrome must load:
+# Chromium records an unpacked extension's path on disk, so one loaded from a
+# mounted disk image stops working the moment the image is ejected. This
+# folder is what the Setup Guide points people at, plus a ready-to-inspect
+# copy for anyone doing the load by hand.
+EXTRA_DIR="dist/dmg-extra/Browser Extension"
+rm -rf dist/dmg-extra
+mkdir -p "$EXTRA_DIR"
+cp -R "$HOME/Library/Application Support/VDR/extension-chrome" "$EXTRA_DIR/extension-chrome"
+cp -R "$HOME/Library/Application Support/VDR/extension-firefox" "$EXTRA_DIR/extension-firefox"
+cat > "$EXTRA_DIR/Setup Guide.txt" <<'GUIDE'
+VDR - browser extension setup (one time)
+
+The floating "VDR" button on video players comes from the "VDR Connector"
+browser extension. Chrome, Edge, Brave, Opera and Vivaldi have to load it by
+hand once, because it is not in the Chrome Web Store.
+
+Do not load the extension from this disk image. Chromium remembers the
+folder path of an unpacked extension, and a copy inside a disk image stops
+working as soon as the image is ejected. Use the stable folder the app
+maintains instead:
+
+  1. Drag VDR to Applications and open it once. VDR writes the current
+     extension to:
+         ~/Library/Application Support/VDR/extension-chrome
+  2. In VDR's menu bar icon menu, click "Setup Browser Extension...". It
+     refreshes those files, reveals the folder in Finder and opens
+     chrome://extensions.
+  3. In the extensions page: turn on Developer mode (top right), click
+     "Load unpacked" and choose the revealed extension-chrome folder.
+
+Firefox: open about:debugging#/runtime/this-firefox, click "Load Temporary
+Add-on..." and choose extension-firefox/manifest.json from the same
+Application Support folder. Firefox drops temporary add-ons on restart.
+
+Safari: needs a one-time conversion with Xcode's
+safari-web-extension-converter; see the "Safari" section of README.md.
+
+Keep VDR running (it can sit in the background): the extension talks to it
+on 127.0.0.1:27182 and the button does nothing while VDR is closed.
+GUIDE
 
 echo "==> Creating $DMG_NAME"
 # Plain `hdiutil create -srcfolder` sets no window size or icon layout at
@@ -113,6 +166,7 @@ echo "==> Creating $DMG_NAME"
 # without needing Finder automation permissions to build it.
 rm -f "$DMG_NAME" VDR-*-macOS-Installer.dmg "VDR Installer.dmg"
 DMG_APP_NAME="$APP_NAME" DMG_APP_PATH="dist/$APP_NAME.app" \
-  dmgbuild -s scripts/dmg_settings.py "$APP_NAME" "$DMG_NAME"
+  DMG_EXTRA_DIR="$EXTRA_DIR" \
+  "$DMGBUILD" -s scripts/dmg_settings.py "$APP_NAME" "$DMG_NAME"
 
 echo "==> Done: $DMG_NAME"

@@ -203,14 +203,21 @@ Developers running from source on Windows can run
 `python scripts/build_extension.py` (writes the same `%LOCALAPPDATA%\VDR`
 tree) and `python main.py --install-browser-extension`.
 
-### macOS / from source
+### macOS
 
-`browser_extension/` is the shared source. Safari needs a one-time conversion into a
-native app wrapper (Apple requires this — there's no "load unpacked" for Safari).
-In all cases, make sure the desktop app (`main.py`, or the installed `.app`) is running
-first — the extension only works while it's listening on `127.0.0.1:27182`.
+The app keeps the extension in a stable folder and refreshes it on every launch, so
+an installed VDR needs no repo checkout:
 
-First, generate the per-browser packages (`scripts/build_dmg.sh` does this too):
+1. Launch VDR once — it writes the current extension to
+   `~/Library/Application Support/VDR/extension-chrome`.
+2. In VDR's menu-bar icon menu, click **Setup Browser Extension…**. That refreshes
+   the files, reveals the folder in Finder and opens Chrome's extensions page.
+3. In Chrome: **Developer mode → Load unpacked →** select the revealed
+   `extension-chrome` folder. This is one-time; it survives upgrades because the
+   folder (and the extension's id) never change.
+
+From a source checkout the same thing is two commands (`scripts/build_dmg.sh` runs
+the first one for the DMG, and the frozen app carries the extension inside itself):
 
 ```bash
 python3 scripts/build_extension.py
@@ -222,11 +229,23 @@ That writes ready-to-load copies to a stable location:
 - Chromium (Windows): `%LOCALAPPDATA%\VDR\extension-chrome`
 - Firefox: next to the Chromium copy, as `extension-firefox`
 
-**On macOS, load from those paths, not from `browser_extension/` in the checkout.** Chromium
-records the on-disk path of an unpacked extension and silently disables it if that path
-ever moves — so loading it out of a source tree means renaming or relocating the repo
-breaks the extension, and the floating button just stops appearing. Re-run the script
-after changing extension code.
+**On macOS, load from those Application Support paths, not from `browser_extension/`
+in the checkout or from the installer DMG.** Chromium records the on-disk path of an
+unpacked extension and silently disables it if that path ever moves — loading it out
+of a source tree breaks when the repo is renamed, and loading it from the disk image
+breaks as soon as the image is ejected; either way the floating button just stops
+appearing. Refreshing is safe: the launch-time refresh and the build script copy in
+place rather than delete-and-recreate, so a loaded copy keeps working.
+
+#### If the ⬇ VDR button disappears
+
+The extension's id changed once, in v2.2.4 (2026-09-14), when it gained a fixed
+signing key so Windows Setup could register it under one stable id from then on. A
+copy a browser loaded before that keeps its old id, and once the folder is refreshed
+Chrome reports it as *"Manifest file is missing or unreadable"*. Fix: remove that
+broken VDR Connector card in `chrome://extensions` (Developer mode) and load unpacked
+again from `~/Library/Application Support/VDR/extension-chrome`. Rebuilds no longer
+change the id, so this cannot recur.
 
 ### Chrome, Edge, Brave, Opera, Vivaldi (Chromium) — macOS / Linux only
 

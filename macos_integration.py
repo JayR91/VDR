@@ -2,7 +2,9 @@
 
 The download engine remains usable without PyObjC.  On macOS, installing the
 optional dependency enables a Dock badge, native notifications/chime, a menu
-bar utility, and dropping URLs onto its menu-bar icon.
+bar utility, dropping URLs onto its menu-bar icon, and a one-time
+"Setup Browser Extension…" item that refreshes the unpacked extension, shows
+its folder and opens Chrome's extensions page.
 """
 
 import platform
@@ -10,12 +12,14 @@ import subprocess
 
 
 class MacIntegration:
-    def __init__(self, add_url_callback=None, show_callback=None, quit_callback=None):
+    def __init__(self, add_url_callback=None, show_callback=None, quit_callback=None,
+                 setup_callback=None):
         self.available = False
         self.status_item = None
         self._add_url = add_url_callback
         self._show = show_callback
         self._quit = quit_callback
+        self._setup = setup_callback
         self._progress_text = ""
         self._view = None
         if platform.system() != "Darwin":
@@ -99,6 +103,9 @@ class MacIntegration:
             def showWindow_(self, sender):
                 if integration._show:
                     integration._show()
+            def setupExtension_(self, sender):
+                if integration._setup:
+                    integration._setup()
             def quitApp_(self, sender):
                 if integration._quit:
                     integration._quit()
@@ -107,6 +114,15 @@ class MacIntegration:
         open_item.setTarget_(self._actions)
         quit_item.setTarget_(self._actions)
         menu.addItem_(open_item)
+        if self._setup:
+            # The one-time "Load unpacked" click is unavoidable on current
+            # Chromium; this item does the rest of the walkthrough --
+            # refresh the files, reveal the folder, open the extensions page.
+            setup_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "Setup Browser Extension…", "setupExtension:", ""
+            )
+            setup_item.setTarget_(self._actions)
+            menu.addItem_(setup_item)
         menu.addItem_(quit_item)
         self._menu = menu
         self.status_item.setMenu_(menu)

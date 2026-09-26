@@ -178,6 +178,36 @@ check("overlay searches html5-video-player", ".html5-video-player" in content)
 check("overlay re-latches on yt-navigate-finish", "yt-navigate-finish" in content)
 check("overlay no longer one-shot data-vdr-attached", "data-vdr-attached" not in content)
 
+# --- one-time browser setup helper (pure argv steps) ------------------------
+darwin_steps = extension_install.browser_setup_steps(
+    Path("/tmp/vdr-ext"), platform="darwin"
+)
+check("macOS setup reveals the folder", darwin_steps[0][:2] == ["open", "-R"])
+check(
+    "macOS setup opens Chrome's extensions page",
+    darwin_steps[1][-1] == "chrome://extensions",
+)
+win_steps = extension_install.browser_setup_steps(
+    Path(r"C:\Users\test\AppData\Local\VDR\extension-chrome"), platform="win32"
+)
+check(
+    "Windows setup reveals the folder",
+    win_steps[0][0] == "explorer" and win_steps[0][1].startswith("/select,"),
+)
+check(
+    "Windows setup points at a Chromium extensions scheme",
+    len(win_steps) == 1 or win_steps[1][1].endswith("://extensions"),
+)
+check(
+    "Linux has no browser setup steps",
+    extension_install.browser_setup_steps(Path("/tmp/vdr-ext"), platform="linux") == [],
+)
+check(
+    "setup instructions name the folder",
+    "/tmp/vdr-ext" in extension_install.setup_instructions(Path("/tmp/vdr-ext")),
+)
+check("refresh_tree is public for build_extension.py", callable(extension_install.refresh_tree))
+
 print()
 if failures:
     print(f"FAIL - {len(failures)} check(s) failed:")
